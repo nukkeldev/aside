@@ -3,9 +3,9 @@
 > [!NOTE]
 > This is my first project that makes use of GitHub Copilot (or any similar) as
 > I experiment with it (I am very, very late). I primarily use it for 
-> boilerplate that I can later fix up and add to as it's not very good with Zig 
-> to be honest but it's good enough to write the code for this sort of program 
-> very quickly, which I hadn't been able to do before.
+> boilerplate that I can later fix up and add to. It's not very good with Zig 
+> but it's good enough to write the structure of the code for this sort of 
+> program very quickly, which I enjoy.
 
 ## Ideas
 
