@@ -91,7 +91,15 @@ fn linkFinderMain(allocator: std.mem.Allocator, args: []const []const u8) !void 
         return;
     }
 
-    // Create LinkFinder and process
+    if (url) |u| {
+        if (!std.mem.startsWith(u8, u, "http://") and !std.mem.startsWith(u8, u, "https://")) {
+            std.log.err("URL must start with http:// or https://", .{});
+            return;
+        }
+    }
+
+    // ---
+
     const link_finder = LinkFinder.init(settings);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -107,7 +115,13 @@ fn linkFinderMain(allocator: std.mem.Allocator, args: []const []const u8) !void 
         break :blk try link_finder.findLinksLocalLeaky(arena_allocator, file_content, null);
     } else unreachable;
 
-    // Output results
+    // ---
+
+    if (links.items.len == 0) {
+        std.log.info("No links found.", .{});
+        return;
+    }
+
     std.log.info("Found {} links:", .{links.items.len});
     for (links.items, 0..) |link, idx| {
         std.log.info("  {}: {s}", .{ idx + 1, link });
