@@ -4,7 +4,101 @@ const httpz = @import("httpz");
 // -- Main -- //
 
 pub fn main() !void {
-    std.debug.print("TODO: Write the CLI part...\n", .{});
+    var da = std.heap.DebugAllocator(.{}).init;
+    defer _ = da.deinit();
+    const allocator = if (@import("builtin").mode == .Debug) da.allocator() else std.heap.smp_allocator;
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    if (args.len < 2) {
+        printUsage();
+        return;
+    }
+
+    const command = args[1];
+    if (!std.mem.eql(u8, command, "link-finder") and !std.mem.eql(u8, command, "lf")) {
+        std.log.err("Unknown command: {s}", .{command});
+        printUsage();
+        return;
+    }
+
+    var settings: LinkFinder.Settings = .{};
+    var url: ?[]const u8 = null;
+    var local_file: ?[]const u8 = null;
+
+    // Parse arguments
+    var i: usize = 2;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+
+        if (std.mem.eql(u8, arg, "--recursive") or std.mem.eql(u8, arg, "-r")) {
+            settings.recurse = true;
+        } else if (std.mem.eql(u8, arg, "--debug") or std.mem.eql(u8, arg, "-d")) {
+            settings.debug = true;
+        } else if (std.mem.eql(u8, arg, "--limit") or std.mem.eql(u8, arg, "-l")) {
+            if (i + 1 < args.len) {
+                i += 1;
+                settings.recursion_limit = try std.fmt.parseInt(usize, args[i], 10);
+            } else {
+                std.log.err("--limit requires a value", .{});
+                return;
+            }
+        } else if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
+            if (i + 1 < args.len) {
+                i += 1;
+                local_file = args[i];
+            } else {
+                std.log.err("--file requires a file path", .{});
+                return;
+            }
+        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printUsage();
+            return;
+        } else if (!std.mem.startsWith(u8, arg, "-")) {
+            // Assume it's a URL if it doesn't start with -
+            url = arg;
+        } else {
+            std.log.err("Unknown option: {s}", .{arg});
+            printUsage();
+            return;
+        }
+    }
+
+    // Validate input
+    if (url == null and local_file == null) {
+        std.log.err("Either URL or --file must be provided", .{});
+        printUsage();
+        return;
+    }
+
+    if (url != null and local_file != null) {
+        std.log.err("Cannot specify both URL and --file", .{});
+        printUsage();
+        return;
+    }
+
+    // Create LinkFinder and process
+    const link_finder = LinkFinder.init(settings);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    const links = if (url) |u| blk: {
+        std.log.info("Fetching links from: {s}", .{u});
+        break :blk try link_finder.findLinksRemoteLeaky(arena_allocator, u);
+    } else if (local_file) |file_path| blk: {
+        std.log.info("Reading links from file: {s}", .{file_path});
+        const file_content = try std.fs.cwd().readFileAlloc(arena_allocator, file_path, std.math.maxInt(usize));
+        break :blk try link_finder.findLinksLocalLeaky(arena_allocator, file_content, null);
+    } else unreachable;
+
+    // Output results
+    std.log.info("Found {} links:", .{links.items.len});
+    for (links.items, 0..) |link, idx| {
+        std.log.info("  {}: {s}", .{ idx + 1, link });
+    }
 }
 
 // -- Link Finder -- //
@@ -78,7 +172,6 @@ pub const LinkFinder = struct {
 
         while (sources_queue.items.len > 0) {
             const source = sources_queue.orderedRemove(0);
-            if (link_finder.settings.debug) std.log.debug("Processing source queue of length {} at depth {}.", .{ sources_queue.items.len, source.depth });
 
             if (source.depth >= link_finder.settings.recursion_limit) {
                 if (link_finder.settings.debug) std.log.debug("Reached recursion limit at depth {}.", .{source.depth});
@@ -87,7 +180,10 @@ pub const LinkFinder = struct {
 
             const src, const base_url_opt = switch (source.inner) {
                 .Local => |local| .{ local, url },
-                .Remote => |remote| .{ (try fetchHTML(link_finder, allocator, remote)).items, remote },
+                .Remote => |remote| .{ (fetchHTML(link_finder, allocator, remote) catch |e| {
+                    std.log.err("Failed to retrieve HTML contents due to {}", .{e});
+                    continue;
+                }).items, remote },
             };
 
             var steps: usize = 0;
@@ -184,7 +280,7 @@ pub const LinkFinder = struct {
         var response = std.ArrayList(u8).init(allocator);
         errdefer response.deinit();
 
-        var client: std.http.Client = .{ .allocator = std.testing.allocator };
+        var client: std.http.Client = .{ .allocator = allocator };
         defer client.deinit();
 
         const result = try client.fetch(.{
@@ -289,4 +385,30 @@ pub const LinkFinder = struct {
 test {
     std.testing.log_level = .debug;
     std.testing.refAllDecls(LinkFinder);
+}
+
+// -- Usage -- //
+
+fn printUsage() void {
+    const usage =
+        \\Usage: aside {{link-finder|lf}} [OPTIONS] [URL]
+        \\
+        \\Find links in HTML content from URLs or local files.
+        \\
+        \\Options:
+        \\  -r, --recursive          Follow links recursively
+        \\  -l, --limit <NUM>        Maximum recursion depth (default: 4)
+        \\  -f, --file <PATH>        Read from local HTML file instead of URL
+        \\  -d, --debug              Enable debug output
+        \\  -h, --help               Show this help message
+        \\
+        \\Examples:
+        \\  aside lf https://example.com
+        \\  aside link-finder --recursive --limit 2 https://example.com
+        \\  aside lf --file index.html
+        \\  aside lf --debug --recursive https://example.com
+        \\  aside lf --help
+        \\
+    ;
+    std.debug.print(usage, .{});
 }
