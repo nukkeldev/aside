@@ -1,30 +1,10 @@
 const std = @import("std");
 const httpz = @import("httpz");
 
+// -- Main -- //
+
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-
-    // More advance cases will use a custom "Handler" instead of "void".
-    // The last parameter is our handler instance, since we have a "void"
-    // handler, we passed a void ({}) value.
-    var server = try httpz.Server(void).init(allocator, .{ .port = 5882 }, {});
-    defer {
-        // clean shutdown, finishes serving any live request
-        server.stop();
-        server.deinit();
-    }
-
-    var router = try server.router(.{});
-    router.get("/api/user/:id", getUser, .{});
-
-    // blocks
-    try server.listen();
-}
-
-fn getUser(req: *httpz.Request, res: *httpz.Response) !void {
-    res.status = 200;
-    try res.json(.{ .id = req.param("id").?, .name = "Teg" }, .{});
+    std.debug.print("TODO: Write the CLI part...\n", .{});
 }
 
 // -- Link Finder -- //
@@ -32,18 +12,24 @@ fn getUser(req: *httpz.Request, res: *httpz.Response) !void {
 pub const LinkFinder = struct {
     settings: Settings,
 
-    pub const Link = struct {
-        /// The URL found in the HTML content.
-        url: []const u8,
-        /// The URL being parsed.
-        is_relative_to: ?[]const u8 = null,
-    };
+    // -- Types -- //
+
+    pub const Link = []const u8;
+    // struct {
+    //     /// The URL found in the HTML content.
+    //     url: []const u8,
+    //     /// The URL being parsed.
+    //     is_relative_to: ?[]const u8 = null,
+    // };
+
     pub const Settings = struct {
         /// Whether to "recursively" find links (though it's done iteratively).
         recurse: bool = false,
         /// Debug mode, which enables additional logging.
         debug: bool = false,
     };
+
+    // -- Initialization -- //
 
     /// Initializes a new LinkFinder instance with the given settings.
     pub fn init(settings: Settings) LinkFinder {
@@ -53,6 +39,8 @@ pub const LinkFinder = struct {
             .settings = settings,
         };
     }
+
+    // -- Link Finding -- //
 
     /// Finds links in the provided HTML content.
     /// Totally super accurate and reliable, not at all a placeholder.
@@ -113,6 +101,39 @@ pub const LinkFinder = struct {
         return links;
     }
 
+    // -- Helpers -- //
+
+    fn fetchHTML(allocator: std.mem.Allocator, url: []const u8) !std.ArrayList(u8) {
+        var response = std.ArrayList(u8).init(allocator);
+        errdefer response.deinit();
+
+        var client: std.http.Client = .{ .allocator = std.testing.allocator };
+        defer client.deinit();
+
+        const result = try client.fetch(.{
+            .location = .{ .url = url },
+            .method = .GET,
+            .response_storage = .{ .dynamic = &response },
+        });
+
+        if (result.status != .ok) {
+            std.log.err("Failed to fetch \"{s}\". Status: {}", .{ url, result.status });
+            return error.BadStatus;
+        }
+
+        return response;
+    }
+
+    // -- Tests -- //
+
+    test "fetch html" {
+        const allocator = std.testing.allocator;
+
+        const url = "https://example.com/";
+        const response = try fetchHTML(allocator, url);
+        defer response.deinit();
+    }
+
     test "find links" {
         const allocator = std.testing.allocator;
         const html = @embedFile("test/google.html");
@@ -130,8 +151,27 @@ pub const LinkFinder = struct {
             "/intl/en/policies/privacy/",
         };
 
-        const link_finder = LinkFinder.init(.{ .debug = true });
+        const link_finder = LinkFinder.init(.{ .debug = false });
         const links = try link_finder.findLinks(allocator, html);
+        defer links.deinit();
+
+        try std.testing.expectEqual(expected_links.len, links.items.len);
+        for (links.items, expected_links) |found, expected| {
+            try std.testing.expectEqualStrings(expected, found);
+        }
+    }
+
+    test "fetch html & find links" {
+        const allocator = std.testing.allocator;
+
+        const url = "https://example.com/";
+        const html = try fetchHTML(allocator, url);
+        defer html.deinit();
+
+        const expected_links: []const []const u8 = &.{"https://www.iana.org/domains/example"};
+
+        const link_finder = LinkFinder.init(.{ .debug = false });
+        const links = try link_finder.findLinks(allocator, html.items);
         defer links.deinit();
 
         try std.testing.expectEqual(expected_links.len, links.items.len);

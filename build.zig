@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
 
     const tests = b.addTest(.{
         .root_module = mod,
+        .filters = b.args orelse &.{},
     });
 
     const run_tests = b.addRunArtifact(tests);
