@@ -15,13 +15,6 @@ pub const LinkFinder = struct {
     // -- Types -- //
 
     pub const Link = []const u8;
-    // struct {
-    //     /// The URL found in the HTML content.
-    //     url: []const u8,
-    //     /// The URL being parsed.
-    //     is_relative_to: ?[]const u8 = null,
-    // };
-
     pub const Settings = struct {
         /// Whether to "recursively" find links (though it's done iteratively).
         recurse: bool = false,
@@ -42,9 +35,27 @@ pub const LinkFinder = struct {
 
     // -- Link Finding -- //
 
+    pub fn findLinksRemoteLeaky(
+        link_finder: LinkFinder,
+        hopefully_arena_allocator: std.mem.Allocator,
+        url: []const u8,
+    ) !std.ArrayList(Link) {
+        if (link_finder.settings.debug) std.log.debug("Fetching HTML from: {s}", .{url});
+
+        // NOTE: Explicitly not deinit'd as findLinksLocal doesn't dupe the links.
+        const html = try fetchHTML(hopefully_arena_allocator, url);
+
+        if (link_finder.settings.debug) std.log.debug("HTML fetched successfully, length: {}", .{html.items.len});
+
+        return link_finder.findLinksLocal(hopefully_arena_allocator, html.items);
+    }
+
     /// Finds links in the provided HTML content.
-    /// Totally super accurate and reliable, not at all a placeholder.
-    pub fn findLinks(link_finder: LinkFinder, allocator: std.mem.Allocator, html: []const u8) !std.ArrayList(Link) {
+    pub fn findLinksLocal(
+        link_finder: LinkFinder,
+        allocator: std.mem.Allocator,
+        html: []const u8,
+    ) !std.ArrayList(Link) {
         var links = std.ArrayList(Link).init(allocator);
 
         var steps: usize = 0;
@@ -126,7 +137,7 @@ pub const LinkFinder = struct {
 
     // -- Tests -- //
 
-    test "fetch html" {
+    test "fetchHTML" {
         const allocator = std.testing.allocator;
 
         const url = "https://example.com/";
@@ -134,7 +145,7 @@ pub const LinkFinder = struct {
         defer response.deinit();
     }
 
-    test "find links" {
+    test "findLinksLocal" {
         const allocator = std.testing.allocator;
         const html = @embedFile("test/google.html");
         const expected_links: []const []const u8 = &.{
@@ -152,7 +163,7 @@ pub const LinkFinder = struct {
         };
 
         const link_finder = LinkFinder.init(.{ .debug = false });
-        const links = try link_finder.findLinks(allocator, html);
+        const links = try link_finder.findLinksLocal(allocator, html);
         defer links.deinit();
 
         try std.testing.expectEqual(expected_links.len, links.items.len);
@@ -161,17 +172,15 @@ pub const LinkFinder = struct {
         }
     }
 
-    test "fetch html & find links" {
-        const allocator = std.testing.allocator;
+    test "findLinksRemoteLeaky" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
 
-        const url = "https://example.com/";
-        const html = try fetchHTML(allocator, url);
-        defer html.deinit();
-
+        const allocator = arena.allocator();
         const expected_links: []const []const u8 = &.{"https://www.iana.org/domains/example"};
 
         const link_finder = LinkFinder.init(.{ .debug = false });
-        const links = try link_finder.findLinks(allocator, html.items);
+        const links = try link_finder.findLinksRemoteLeaky(allocator, "https://example.com/");
         defer links.deinit();
 
         try std.testing.expectEqual(expected_links.len, links.items.len);
