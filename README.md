@@ -1,5 +1,12 @@
 # `aside`
 
+> [!NOTE] Disclaimer
+> This is my first project that makes use of GitHub Copilot (or any similar) as
+> I experiment with it (I am very, very late). I primarily use it for 
+> boilerplate that I can later fix up and add to as it's not very good with Zig 
+> to be honest but it's good enough to write the code for this sort of program 
+> very quickly, which I hadn't been able to do before.
+
 A dumb CLI assistant that does quite a few random things. These (could) include, 
 but are not limited to:
 - [x] (Recusively) scanning remote or local html for links.
