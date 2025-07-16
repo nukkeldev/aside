@@ -2,10 +2,10 @@
 
 A dumb CLI assistant that does quite a few random things. These (could) include, 
 but are not limited to:
-- [ ] (Recusively) scanning remote or local html for links.
+- [x] (Recusively) scanning remote or local html for links.
     - [x] Local
     - [x] Remote
-    - [ ] Recursive-ness(?)
+    - [x] Recursive-ness
 - [ ] Calculating upper and lower bound memory allocations for zig functions.
 - [ ] A preprocessor for zig, i.e. comptime++, via `build.zig`.
 - [ ] A natural-language esque REPL.
