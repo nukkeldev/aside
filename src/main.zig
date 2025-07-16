@@ -8,6 +8,8 @@ pub fn main() !void {
     defer _ = da.deinit();
     const allocator = if (@import("builtin").mode == .Debug) da.allocator() else std.heap.smp_allocator;
 
+    // ---
+
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
@@ -16,19 +18,29 @@ pub fn main() !void {
         return;
     }
 
+    // ---
+
     const command = args[1];
-    if (!std.mem.eql(u8, command, "link-finder") and !std.mem.eql(u8, command, "lf")) {
+
+    if (std.mem.eql(u8, command, "link-finder") or std.mem.eql(u8, command, "lf")) {
+        try linkFinderMain(allocator, args[2..]);
+    } else if (std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
+        printUsage();
+    } else {
         std.log.err("Unknown command: {s}", .{command});
         printUsage();
         return;
     }
+}
 
+fn linkFinderMain(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var settings: LinkFinder.Settings = .{};
     var url: ?[]const u8 = null;
-    var local_file: ?[]const u8 = null;
+    var file: ?[]const u8 = null;
 
-    // Parse arguments
-    var i: usize = 2;
+    // ---
+
+    var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
 
@@ -47,34 +59,35 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, arg, "--file") or std.mem.eql(u8, arg, "-f")) {
             if (i + 1 < args.len) {
                 i += 1;
-                local_file = args[i];
+                file = args[i];
             } else {
                 std.log.err("--file requires a file path", .{});
                 return;
             }
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            printUsage();
+            printLinkFinderUsage();
             return;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             // Assume it's a URL if it doesn't start with -
             url = arg;
         } else {
-            std.log.err("Unknown option: {s}", .{arg});
-            printUsage();
+            std.log.err("Unknown option for link-finder: {s}", .{arg});
+            printLinkFinderUsage();
             return;
         }
     }
 
-    // Validate input
-    if (url == null and local_file == null) {
+    // ---
+
+    if (url == null and file == null) {
         std.log.err("Either URL or --file must be provided", .{});
-        printUsage();
+        printLinkFinderUsage();
         return;
     }
 
-    if (url != null and local_file != null) {
+    if (url != null and file != null) {
         std.log.err("Cannot specify both URL and --file", .{});
-        printUsage();
+        printLinkFinderUsage();
         return;
     }
 
@@ -88,7 +101,7 @@ pub fn main() !void {
     const links = if (url) |u| blk: {
         std.log.info("Fetching links from: {s}", .{u});
         break :blk try link_finder.findLinksRemoteLeaky(arena_allocator, u);
-    } else if (local_file) |file_path| blk: {
+    } else if (file) |file_path| blk: {
         std.log.info("Reading links from file: {s}", .{file_path});
         const file_content = try std.fs.cwd().readFileAlloc(arena_allocator, file_path, std.math.maxInt(usize));
         break :blk try link_finder.findLinksLocalLeaky(arena_allocator, file_content, null);
@@ -113,7 +126,7 @@ pub const LinkFinder = struct {
         /// Whether to "recursively" find links (though it's done iteratively).
         recurse: bool = false,
         /// Maximum number of links to follow.
-        recursion_limit: usize = 4,
+        recursion_limit: usize = 2,
         /// Debug mode, which enables additional logging.
         debug: bool = false,
     };
@@ -391,13 +404,34 @@ test {
 
 fn printUsage() void {
     const usage =
+        \\Usage: aside <COMMAND> [OPTIONS] [ARGS]
+        \\
+        \\Available Commands:
+        \\  link-finder, lf          Find links in HTML content from URLs or local files
+        \\
+        \\Global Options:
+        \\  -h, --help               Show this help message
+        \\
+        \\Use 'aside <COMMAND> --help' for more information on a command.
+        \\
+        \\Examples:
+        \\  aside lf https://example.com
+        \\  aside link-finder --help
+        \\  aside --help
+        \\
+    ;
+    std.debug.print(usage, .{});
+}
+
+fn printLinkFinderUsage() void {
+    const usage =
         \\Usage: aside {{link-finder|lf}} [OPTIONS] [URL]
         \\
         \\Find links in HTML content from URLs or local files.
         \\
         \\Options:
         \\  -r, --recursive          Follow links recursively
-        \\  -l, --limit <NUM>        Maximum recursion depth (default: 4)
+        \\  -l, --limit <NUM>        Maximum recursion depth (default: 2)
         \\  -f, --file <PATH>        Read from local HTML file instead of URL
         \\  -d, --debug              Enable debug output
         \\  -h, --help               Show this help message
@@ -407,7 +441,6 @@ fn printUsage() void {
         \\  aside link-finder --recursive --limit 2 https://example.com
         \\  aside lf --file index.html
         \\  aside lf --debug --recursive https://example.com
-        \\  aside lf --help
         \\
     ;
     std.debug.print(usage, .{});
