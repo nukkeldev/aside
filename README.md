@@ -1,6 +1,6 @@
 # `aside`
 
-> [!NOTE] Disclaimer
+> [!NOTE]
 > This is my first project that makes use of GitHub Copilot (or any similar) as
 > I experiment with it (I am very, very late). I primarily use it for 
 > boilerplate that I can later fix up and add to as it's not very good with Zig 
