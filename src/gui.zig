@@ -266,6 +266,63 @@ fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
     }
 }
 
+// Helper function to save results to a text file
+fn saveResultsToFile(state: *LinkFinderState) void {
+    const results = state.getResults();
+    if (results.len == 0) return;
+
+    // Generate filename with timestamp
+    const timestamp = std.time.timestamp();
+    const filename = std.fmt.allocPrint(state.allocator, "links_{}.txt", .{timestamp}) catch {
+        // If we can't allocate for the filename, use a default
+        const file = std.fs.cwd().createFile("links_export.txt", .{}) catch return;
+        defer file.close();
+
+        // Write header
+        const stats = state.getStats();
+        file.writer().print("Link Export\n", .{}) catch return;
+        file.writer().print("Generated: {}\n", .{timestamp}) catch return;
+        file.writer().print("Total Links: {}\n", .{results.len}) catch return;
+        file.writer().print("Pages Processed: {}\n", .{stats.processed}) catch return;
+        file.writer().print("\n", .{}) catch return;
+
+        // Write all links
+        for (results, 1..) |link, index| {
+            file.writer().print("{}: {s}\n", .{ index, link }) catch return;
+        }
+        return;
+    };
+    defer state.allocator.free(filename);
+
+    // Create and write to file
+    const file = std.fs.cwd().createFile(filename, .{}) catch return;
+    defer file.close();
+
+    // Write header information
+    const stats = state.getStats();
+    const total_duration = stats.last_activity_time - stats.start_time;
+
+    file.writer().print("Link Export\n", .{}) catch return;
+    file.writer().print("Generated: {}\n", .{timestamp}) catch return;
+    file.writer().print("Total Links: {}\n", .{results.len}) catch return;
+    file.writer().print("Pages Processed: {}\n", .{stats.processed}) catch return;
+
+    if (total_duration > 0) {
+        var arena = std.heap.ArenaAllocator.init(state.allocator);
+        defer arena.deinit();
+        const arena_allocator = arena.allocator();
+        const duration_str = formatDuration(arena_allocator, total_duration) catch "N/A";
+        file.writer().print("Processing Time: {s}\n", .{duration_str}) catch return;
+    }
+
+    file.writer().print("\n", .{}) catch return;
+
+    // Write all links
+    for (results, 1..) |link, index| {
+        file.writer().print("{}: {s}\n", .{ index, link }) catch return;
+    }
+}
+
 fn renderLinkFinderTab(state: *LinkFinderState) void {
     // Input fields
     zgui.text("URL:", .{});
@@ -358,6 +415,15 @@ fn renderLinkFinderTab(state: *LinkFinderState) void {
     if (zgui.button("Clear Results", .{})) {
         state.clearResults();
     }
+
+    zgui.sameLine(.{});
+
+    // Save results button
+    zgui.beginDisabled(.{ .disabled = !state.hasResults() or state.getResults().len == 0 });
+    if (zgui.button("Save Results", .{})) {
+        saveResultsToFile(state);
+    }
+    zgui.endDisabled();
 
     // Status display
     if (state.isRunning()) {
