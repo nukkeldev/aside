@@ -8,6 +8,41 @@ const tracy = @import("perf/tracy.zig");
 const FZ = tracy.FnZone;
 const LinkFinder = @import("tools/LinkFinder.zig");
 
+// -- Catppuccin Mocha Colors -- //
+const CatppuccinMocha = struct {
+    // Base colors
+    const base = [4]f32{ 30.0 / 255.0, 30.0 / 255.0, 46.0 / 255.0, 1.0 }; // #1e1e2e
+    const mantle = [4]f32{ 24.0 / 255.0, 24.0 / 255.0, 37.0 / 255.0, 1.0 }; // #181825
+    const crust = [4]f32{ 17.0 / 255.0, 17.0 / 255.0, 27.0 / 255.0, 1.0 }; // #11111b
+
+    // Text colors
+    const text = [4]f32{ 205.0 / 255.0, 214.0 / 255.0, 244.0 / 255.0, 1.0 }; // #cdd6f4
+    const subtext1 = [4]f32{ 186.0 / 255.0, 194.0 / 255.0, 222.0 / 255.0, 1.0 }; // #bac2de
+    const subtext0 = [4]f32{ 166.0 / 255.0, 173.0 / 255.0, 200.0 / 255.0, 1.0 }; // #a6adc8
+    const overlay2 = [4]f32{ 147.0 / 255.0, 153.0 / 255.0, 178.0 / 255.0, 1.0 }; // #9399b2
+    const overlay1 = [4]f32{ 127.0 / 255.0, 132.0 / 255.0, 156.0 / 255.0, 1.0 }; // #7f849c
+    const overlay0 = [4]f32{ 108.0 / 255.0, 112.0 / 255.0, 134.0 / 255.0, 1.0 }; // #6c7086
+    const surface2 = [4]f32{ 88.0 / 255.0, 91.0 / 255.0, 112.0 / 255.0, 1.0 }; // #585b70
+    const surface1 = [4]f32{ 69.0 / 255.0, 71.0 / 255.0, 90.0 / 255.0, 1.0 }; // #45475a
+    const surface0 = [4]f32{ 49.0 / 255.0, 50.0 / 255.0, 68.0 / 255.0, 1.0 }; // #313244
+
+    // Accent colors
+    const rosewater = [4]f32{ 245.0 / 255.0, 224.0 / 255.0, 220.0 / 255.0, 1.0 }; // #f5e0dc
+    const flamingo = [4]f32{ 242.0 / 255.0, 205.0 / 255.0, 205.0 / 255.0, 1.0 }; // #f2cdcd
+    const pink = [4]f32{ 245.0 / 255.0, 194.0 / 255.0, 231.0 / 255.0, 1.0 }; // #f5c2e7
+    const mauve = [4]f32{ 203.0 / 255.0, 166.0 / 255.0, 247.0 / 255.0, 1.0 }; // #cba6f7
+    const red = [4]f32{ 243.0 / 255.0, 139.0 / 255.0, 168.0 / 255.0, 1.0 }; // #f38ba8
+    const maroon = [4]f32{ 235.0 / 255.0, 160.0 / 255.0, 172.0 / 255.0, 1.0 }; // #eba0ac
+    const peach = [4]f32{ 250.0 / 255.0, 179.0 / 255.0, 135.0 / 255.0, 1.0 }; // #fab387
+    const yellow = [4]f32{ 249.0 / 255.0, 226.0 / 255.0, 175.0 / 255.0, 1.0 }; // #f9e2af
+    const green = [4]f32{ 166.0 / 255.0, 227.0 / 255.0, 161.0 / 255.0, 1.0 }; // #a6e3a1
+    const teal = [4]f32{ 148.0 / 255.0, 226.0 / 255.0, 213.0 / 255.0, 1.0 }; // #94e2d5
+    const sky = [4]f32{ 137.0 / 255.0, 220.0 / 255.0, 235.0 / 255.0, 1.0 }; // #89dceb
+    const sapphire = [4]f32{ 116.0 / 255.0, 199.0 / 255.0, 236.0 / 255.0, 1.0 }; // #74c7ec
+    const blue = [4]f32{ 137.0 / 255.0, 180.0 / 255.0, 250.0 / 255.0, 1.0 }; // #89b4fa
+    const lavender = [4]f32{ 180.0 / 255.0, 190.0 / 255.0, 254.0 / 255.0, 1.0 }; // #b4befe
+};
+
 // -- LinkFinder GUI State -- //
 
 const LinkFinderState = struct {
@@ -19,405 +54,199 @@ const LinkFinderState = struct {
     recursion_limit: i32 = 2,
     worker_count: i32 = 4,
 
-    // Thread state
-    worker_threads: std.ArrayList(std.Thread),
-    coordinator_thread: ?std.Thread = null,
-    is_running: bool = false,
-    should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    has_results: bool = false,
-    has_error: bool = false,
-
-    // Work queue and results
-    work_queue: std.ArrayList(QueueItem),
-    results: std.ArrayList([]const u8),
-    processed_urls: std.StringHashMap(void), // To avoid duplicate processing
-    error_message: ?[]const u8 = null,
-
-    // Statistics
-    total_found: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    total_processed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-
-    // Timing information
-    start_time: i64 = 0,
-    last_activity_time: i64 = 0,
-    links_per_second: f64 = 0.0,
-
-    // Threading
+    // LinkFinder instance and processing state
+    link_finder: ?LinkFinder = null,
+    processing_state: ?LinkFinder.ProcessingState = null,
     allocator: std.mem.Allocator,
-    work_mutex: std.Thread.Mutex = .{},
-    results_mutex: std.Thread.Mutex = .{},
-    work_condition: std.Thread.Condition = .{},
-    thread_mutex: std.Thread.Mutex = .{}, // Protect thread management operations
-
-    const QueueItem = struct {
-        url: []const u8,
-        depth: usize,
-        parent: ?[]const u8 = null,
-    };
 
     pub fn init(allocator: std.mem.Allocator) LinkFinderState {
         return LinkFinderState{
-            .worker_threads = std.ArrayList(std.Thread).init(allocator),
-            .work_queue = std.ArrayList(QueueItem).init(allocator),
-            .results = std.ArrayList([]const u8).init(allocator),
-            .processed_urls = std.StringHashMap(void).init(allocator),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *LinkFinderState) void {
-        // Stop all threads
-        self.should_stop.store(true, .release);
-        self.work_condition.broadcast();
-
-        // Join coordinator thread
-        if (self.coordinator_thread) |thread| {
-            thread.join();
+        if (self.processing_state) |*state| {
+            state.deinit();
         }
-
-        // Join worker threads
-        for (self.worker_threads.items) |thread| {
-            thread.join();
-        }
-        self.worker_threads.deinit();
-
-        // Clean up resources
-        self.work_mutex.lock();
-        for (self.work_queue.items) |item| {
-            self.allocator.free(item.url);
-            if (item.parent) |parent| {
-                self.allocator.free(parent);
-            }
-        }
-        self.work_queue.deinit();
-        self.work_mutex.unlock();
-
-        self.results_mutex.lock();
-        for (self.results.items) |result| {
-            self.allocator.free(result);
-        }
-        self.results.deinit();
-        self.results_mutex.unlock();
-
-        self.processed_urls.deinit();
-
-        if (self.error_message) |msg| {
-            self.allocator.free(msg);
+        if (self.link_finder) |*lf| {
+            lf.deinit();
         }
     }
 
     pub fn clearResults(self: *LinkFinderState) void {
-        self.thread_mutex.lock();
-        defer self.thread_mutex.unlock();
-
-        // Only stop threads if they are actually running
-        if (self.is_running) {
-            // Stop all threads
-            self.should_stop.store(true, .release);
-            self.work_condition.broadcast();
-
-            // Small delay to let threads react to the stop signal
-            std.time.sleep(50 * std.time.ns_per_ms);
-
-            // Join coordinator thread if it exists and is joinable
-            if (self.coordinator_thread) |thread| {
-                thread.join();
-                self.coordinator_thread = null;
-            }
-
-            // Join worker threads - they should have already finished due to coordinator cleanup
-            // But we'll try to join them anyway to be safe
-            for (self.worker_threads.items) |thread| {
-                thread.join();
-            }
-            self.worker_threads.clearRetainingCapacity();
-        } else {
-            // If not running, just clear the thread list
-            self.worker_threads.clearRetainingCapacity();
-            self.coordinator_thread = null;
+        if (self.processing_state) |*state| {
+            state.clearResults();
         }
-
-        // Clear work queue
-        self.work_mutex.lock();
-        for (self.work_queue.items) |item| {
-            self.allocator.free(item.url);
-            if (item.parent) |parent| {
-                self.allocator.free(parent);
-            }
-        }
-        self.work_queue.clearRetainingCapacity();
-        self.work_mutex.unlock();
-
-        // Clear results
-        self.results_mutex.lock();
-        for (self.results.items) |result| {
-            self.allocator.free(result);
-        }
-        self.results.clearRetainingCapacity();
-        self.results_mutex.unlock();
-
-        // Clear processed URLs
-        self.processed_urls.clearRetainingCapacity();
-
-        // Clear error message
-        if (self.error_message) |msg| {
-            self.allocator.free(msg);
-            self.error_message = null;
-        }
-
-        // Reset state
-        self.has_results = false;
-        self.has_error = false;
-        self.is_running = false;
-        self.should_stop.store(false, .release);
-        self.total_found.store(0, .release);
-        self.total_processed.store(0, .release);
-        self.start_time = 0;
-        self.last_activity_time = 0;
-        self.links_per_second = 0.0;
     }
-};
 
-// -- Multi-threaded LinkFinder Worker -- //
-
-const WorkerParams = struct {
-    state: *LinkFinderState,
-    filters: []const []const u8,
-    debug: bool,
-    recursion_limit: usize,
-    worker_id: usize,
-};
-
-fn linkFinderWorker(params: *WorkerParams) void {
-    defer params.state.allocator.destroy(params);
-
-    var arena = std.heap.ArenaAllocator.init(params.state.allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    // Create LinkFinder instance for this worker
-    const link_finder = LinkFinder.init(arena_allocator, params.debug, params.filters) catch |err| {
-        params.state.results_mutex.lock();
-        defer params.state.results_mutex.unlock();
-
-        if (params.state.error_message == null) {
-            params.state.error_message = std.fmt.allocPrint(params.state.allocator, "Worker {}: Failed to initialize LinkFinder: {}", .{ params.worker_id, err }) catch "Failed to initialize LinkFinder";
-            params.state.has_error = true;
+    pub fn isRunning(self: *const LinkFinderState) bool {
+        if (self.processing_state) |*state| {
+            return state.is_running;
         }
-        return;
-    };
-    defer link_finder.deinit();
+        return false;
+    }
 
-    while (!params.state.should_stop.load(.acquire)) {
-        // Get work item from queue
-        var work_item: ?LinkFinderState.QueueItem = null;
-
-        params.state.work_mutex.lock();
-        while (params.state.work_queue.items.len == 0 and !params.state.should_stop.load(.acquire)) {
-            params.state.work_condition.wait(&params.state.work_mutex);
+    pub fn hasResults(self: *const LinkFinderState) bool {
+        if (self.processing_state) |*state| {
+            return state.has_results;
         }
+        return false;
+    }
 
-        if (params.state.should_stop.load(.acquire)) {
-            params.state.work_mutex.unlock();
-            break;
+    pub fn hasError(self: *const LinkFinderState) bool {
+        if (self.processing_state) |*state| {
+            return state.has_error;
         }
+        return false;
+    }
 
-        if (params.state.work_queue.items.len > 0) {
-            work_item = params.state.work_queue.orderedRemove(0);
+    pub fn getErrorMessage(self: *const LinkFinderState) ?[]const u8 {
+        if (self.processing_state) |*state| {
+            return state.error_message;
         }
-        params.state.work_mutex.unlock();
+        return null;
+    }
 
-        if (work_item) |item| {
-            if (params.debug) {
-                std.log.debug("Worker {}: Processing {s} at depth {}", .{ params.worker_id, item.url, item.depth });
-            }
+    pub fn getResults(self: *const LinkFinderState) []const []const u8 {
+        if (self.processing_state) |*state| {
+            return state.results.items;
+        }
+        return &[_][]const u8{};
+    }
 
-            // Process the URL
-            const entrypoint = LinkFinder.Source{
-                .link = item.url,
-                .depth = item.depth,
-                .parent = item.parent,
+    pub fn getStats(self: *LinkFinderState) struct {
+        found: u32,
+        processed: u32,
+        queue_size: usize,
+        worker_count: usize,
+        start_time: i64,
+        last_activity_time: i64,
+    } {
+        if (self.processing_state) |*state| {
+            state.work_mutex.lock();
+            const queue_size = state.work_queue.items.len;
+            state.work_mutex.unlock();
+
+            return .{
+                .found = state.total_found.load(.acquire),
+                .processed = state.total_processed.load(.acquire),
+                .queue_size = queue_size,
+                .worker_count = state.worker_threads.items.len,
+                .start_time = state.start_time,
+                .last_activity_time = state.last_activity_time,
             };
-
-            const sources = link_finder.findLinksLeaky(arena_allocator, &entrypoint) catch |err| {
-                if (params.debug) {
-                    std.log.debug("Worker {}: Error processing {s}: {}", .{ params.worker_id, item.url, err });
-                }
-
-                // Clean up this work item
-                params.state.allocator.free(item.url);
-                if (item.parent) |parent| {
-                    params.state.allocator.free(parent);
-                }
-                continue;
-            };
-
-            // Add results and new work items
-            params.state.results_mutex.lock();
-            var new_links_found: u32 = 0;
-            var iter = sources.sources.valueIterator();
-            while (iter.next()) |source| {
-                // Add to results
-                const result = std.fmt.allocPrint(params.state.allocator, "{s} (depth: {}, found by worker {})", .{ source.link, source.depth, params.worker_id }) catch continue;
-                params.state.results.append(result) catch continue;
-                new_links_found += 1;
-
-                // Add to work queue if recursive and within depth limit
-                // The next depth should be source.depth + 1
-                const next_depth = source.depth + 1;
-                if (params.debug) {
-                    std.log.debug("Worker {}: Checking recursion for {s} - current depth: {}, next depth: {}, limit: {}, recursive: {}", .{ params.worker_id, source.link, source.depth, next_depth, params.recursion_limit, params.state.recursive });
-                }
-                if (params.state.recursive and next_depth < params.recursion_limit) {
-                    // Check if we've already processed this URL
-                    if (!params.state.processed_urls.contains(source.link)) {
-                        if (params.debug) {
-                            std.log.debug("Worker {}: Adding {s} to work queue at depth {}", .{ params.worker_id, source.link, next_depth });
-                        }
-                        params.state.work_mutex.lock();
-                        const new_url = params.state.allocator.dupe(u8, source.link) catch {
-                            params.state.work_mutex.unlock();
-                            continue;
-                        };
-                        const new_parent = if (source.parent) |p| params.state.allocator.dupe(u8, p) catch null else null;
-
-                        const new_item = LinkFinderState.QueueItem{
-                            .url = new_url,
-                            .depth = next_depth,
-                            .parent = new_parent,
-                        };
-
-                        params.state.work_queue.append(new_item) catch {
-                            params.state.allocator.free(new_url);
-                            if (new_parent) |p| params.state.allocator.free(p);
-                        };
-                        params.state.processed_urls.put(new_url, {}) catch {};
-                        params.state.work_condition.signal();
-                        params.state.work_mutex.unlock();
-                    } else {
-                        if (params.debug) {
-                            std.log.debug("Worker {}: Skipping {s} - already processed", .{ params.worker_id, source.link });
-                        }
-                    }
-                } else {
-                    if (params.debug) {
-                        std.log.debug("Worker {}: Skipping {s} - recursion check failed", .{ params.worker_id, source.link });
-                    }
-                }
-            }
-            params.state.results_mutex.unlock();
-
-            // Update statistics
-            _ = params.state.total_found.fetchAdd(new_links_found, .acq_rel);
-            _ = params.state.total_processed.fetchAdd(1, .acq_rel);
-
-            // Update activity time for rate calculation
-            params.state.last_activity_time = std.time.milliTimestamp();
-
-            if (params.debug) {
-                std.log.debug("Worker {}: Found {} links from {s}", .{ params.worker_id, new_links_found, item.url });
-            }
-
-            // Clean up this work item
-            params.state.allocator.free(item.url);
-            if (item.parent) |parent| {
-                params.state.allocator.free(parent);
-            }
         }
-    }
-}
-
-// Coordinator thread to manage the overall process
-fn linkFinderCoordinator(params: *WorkerParams) void {
-    defer params.state.allocator.destroy(params);
-
-    // Make a copy of filters for workers to use
-    var filters_copy = std.ArrayList([]const u8).init(params.state.allocator);
-    for (params.filters) |filter| {
-        const filter_copy = params.state.allocator.dupe(u8, filter) catch filter;
-        filters_copy.append(filter_copy) catch {};
-    }
-
-    defer {
-        // Clean up our copy of filters
-        for (filters_copy.items) |filter| {
-            params.state.allocator.free(filter);
-        }
-        filters_copy.deinit();
-
-        // Clean up original filters
-        for (params.filters) |filter| {
-            params.state.allocator.free(filter);
-        }
-        params.state.allocator.free(params.filters);
-    }
-
-    // Start worker threads
-    const worker_count = @as(usize, @intCast(params.state.worker_count));
-    for (0..worker_count) |i| {
-        const worker_params = params.state.allocator.create(WorkerParams) catch continue;
-        worker_params.* = WorkerParams{
-            .state = params.state,
-            .filters = filters_copy.items,
-            .debug = params.debug,
-            .recursion_limit = params.recursion_limit,
-            .worker_id = i,
+        return .{
+            .found = 0,
+            .processed = 0,
+            .queue_size = 0,
+            .worker_count = 0,
+            .start_time = 0,
+            .last_activity_time = 0,
         };
-
-        const thread = std.Thread.spawn(.{}, linkFinderWorker, .{worker_params}) catch continue;
-        params.state.worker_threads.append(thread) catch continue;
     }
+};
 
-    // Wait for all work to be completed
-    var last_queue_size: usize = std.math.maxInt(usize);
-    var idle_cycles: u32 = 0;
+// -- Helpers -- //
 
-    while (!params.state.should_stop.load(.acquire)) {
-        std.time.sleep(100 * std.time.ns_per_ms); // 100ms
+// Apply Catppuccin Mocha theme to ImGui
+fn applyCatppuccinMochaTheme() void {
+    const style = zgui.getStyle();
 
-        params.state.work_mutex.lock();
-        const current_queue_size = params.state.work_queue.items.len;
-        params.state.work_mutex.unlock();
+    // Window colors
+    style.setColor(.window_bg, CatppuccinMocha.base);
+    style.setColor(.child_bg, CatppuccinMocha.mantle);
+    style.setColor(.popup_bg, CatppuccinMocha.surface0);
 
-        if (current_queue_size == 0) {
-            idle_cycles += 1;
-            // If queue has been empty for 500ms, we're probably done
-            if (idle_cycles >= 5) {
-                break;
-            }
-        } else {
-            idle_cycles = 0;
-        }
+    // Border colors
+    style.setColor(.border, CatppuccinMocha.surface1);
+    style.setColor(.border_shadow, CatppuccinMocha.crust);
 
-        if (current_queue_size == last_queue_size and current_queue_size > 0) {
-            // Queue isn't changing, might be stuck
-            idle_cycles += 1;
-            if (idle_cycles >= 10) { // 1 second of no progress
-                break;
-            }
-        }
+    // Frame colors (buttons, checkboxes, etc.)
+    style.setColor(.frame_bg, CatppuccinMocha.surface0);
+    style.setColor(.frame_bg_hovered, CatppuccinMocha.surface1);
+    style.setColor(.frame_bg_active, CatppuccinMocha.surface2);
 
-        last_queue_size = current_queue_size;
-    }
+    // Title colors
+    style.setColor(.title_bg, CatppuccinMocha.mantle);
+    style.setColor(.title_bg_active, CatppuccinMocha.surface0);
+    style.setColor(.title_bg_collapsed, CatppuccinMocha.surface0);
 
-    // Signal completion
-    params.state.should_stop.store(true, .release);
-    params.state.work_condition.broadcast();
+    // Menu colors
+    style.setColor(.menu_bar_bg, CatppuccinMocha.surface0);
 
-    // Wait for all workers to finish
-    for (params.state.worker_threads.items) |thread| {
-        thread.join();
-    }
+    // Scrollbar colors
+    style.setColor(.scrollbar_bg, CatppuccinMocha.surface0);
+    style.setColor(.scrollbar_grab, CatppuccinMocha.surface1);
+    style.setColor(.scrollbar_grab_hovered, CatppuccinMocha.surface2);
+    style.setColor(.scrollbar_grab_active, CatppuccinMocha.overlay0);
 
-    // Clear the worker threads list since we've joined them
-    params.state.thread_mutex.lock();
-    params.state.worker_threads.clearRetainingCapacity();
-    params.state.is_running = false;
-    params.state.has_results = true;
-    params.state.thread_mutex.unlock();
+    // Checkbox colors
+    style.setColor(.check_mark, CatppuccinMocha.green);
+
+    // Slider colors
+    style.setColor(.slider_grab, CatppuccinMocha.blue);
+    style.setColor(.slider_grab_active, CatppuccinMocha.sapphire);
+
+    // Button colors
+    style.setColor(.button, CatppuccinMocha.surface0);
+    style.setColor(.button_hovered, CatppuccinMocha.surface1);
+    style.setColor(.button_active, CatppuccinMocha.surface2);
+
+    // Header colors (for tabs)
+    style.setColor(.header, CatppuccinMocha.surface0);
+    style.setColor(.header_hovered, CatppuccinMocha.surface1);
+    style.setColor(.header_active, CatppuccinMocha.surface2);
+
+    // Separator colors
+    style.setColor(.separator, CatppuccinMocha.surface1);
+    style.setColor(.separator_hovered, CatppuccinMocha.surface2);
+    style.setColor(.separator_active, CatppuccinMocha.overlay0);
+
+    // Resize grip colors
+    style.setColor(.resize_grip, CatppuccinMocha.surface1);
+    style.setColor(.resize_grip_hovered, CatppuccinMocha.surface2);
+    style.setColor(.resize_grip_active, CatppuccinMocha.overlay0);
+
+    // Tab colors
+    style.setColor(.tab, CatppuccinMocha.surface0);
+    style.setColor(.tab_hovered, CatppuccinMocha.surface1);
+    style.setColor(.tab_selected, CatppuccinMocha.surface2);
+    style.setColor(.tab_dimmed, CatppuccinMocha.surface0);
+    style.setColor(.tab_dimmed_selected, CatppuccinMocha.surface1);
+
+    // Text colors
+    style.setColor(.text, CatppuccinMocha.text);
+    style.setColor(.text_disabled, CatppuccinMocha.overlay0);
+
+    // Plot colors
+    style.setColor(.plot_lines, CatppuccinMocha.blue);
+    style.setColor(.plot_lines_hovered, CatppuccinMocha.sapphire);
+    style.setColor(.plot_histogram, CatppuccinMocha.green);
+    style.setColor(.plot_histogram_hovered, CatppuccinMocha.teal);
+
+    // Table colors
+    style.setColor(.table_header_bg, CatppuccinMocha.surface0);
+    style.setColor(.table_border_strong, CatppuccinMocha.surface1);
+    style.setColor(.table_border_light, CatppuccinMocha.surface0);
+    style.setColor(.table_row_bg, CatppuccinMocha.surface0);
+    style.setColor(.table_row_bg_alt, CatppuccinMocha.surface1);
+
+    // Progress bar colors
+    style.setColor(.plot_lines, CatppuccinMocha.blue);
+
+    // Drag and drop colors
+    style.setColor(.drag_drop_target, CatppuccinMocha.yellow);
+
+    // Navigation colors
+    style.setColor(.nav_highlight, CatppuccinMocha.blue);
+    style.setColor(.nav_windowing_highlight, CatppuccinMocha.blue);
+    style.setColor(.nav_windowing_dim_bg, CatppuccinMocha.overlay0);
+
+    // Modal colors
+    style.setColor(.modal_window_dim_bg, CatppuccinMocha.overlay0);
 }
-
-// -- Main -- //
 
 // Helper function to format duration
 fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
@@ -425,7 +254,7 @@ fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
     const minutes = @divFloor(seconds, 60);
     const hours = @divFloor(minutes, 60);
     const milliseconds = @rem(duration_ms, 1000);
-    
+
     if (hours > 0) {
         return try std.fmt.allocPrint(allocator, "{}h {}m {}s {}ms", .{ hours, @rem(minutes, 60), @rem(seconds, 60), milliseconds });
     } else if (minutes > 0) {
@@ -435,7 +264,9 @@ fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
     } else {
         return try std.fmt.allocPrint(allocator, "{}ms", .{milliseconds});
     }
-}fn renderLinkFinderTab(state: *LinkFinderState) void {
+}
+
+fn renderLinkFinderTab(state: *LinkFinderState) void {
     // Input fields
     zgui.text("URL:", .{});
     _ = zgui.inputText("##url", .{ .buf = &state.url_buffer });
@@ -460,111 +291,64 @@ fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
         (std.mem.startsWith(u8, state.url_buffer[0..url_len], "http://") or
             std.mem.startsWith(u8, state.url_buffer[0..url_len], "https://"));
 
-    zgui.beginDisabled(.{ .disabled = !has_url or state.is_running });
+    zgui.beginDisabled(.{ .disabled = !has_url or state.isRunning() });
     if (zgui.button("Find Links", .{})) {
         // Ensure we're not already running
-        if (state.is_running) {
+        if (state.isRunning()) {
             return;
         }
 
-        // Clear previous results (this handles thread cleanup)
+        // Clear previous results
         state.clearResults();
 
-        // Reset statistics and timing
-        state.total_found.store(0, .release);
-        state.total_processed.store(0, .release);
-        state.start_time = std.time.milliTimestamp();
-        state.last_activity_time = state.start_time;
-        state.links_per_second = 0.0;
-
-        // Prepare parameters
-        const url = state.allocator.dupe(u8, state.url_buffer[0..url_len]) catch {
-            state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for URL") catch "Memory error";
-            state.has_error = true;
-            return;
-        };
-
+        // Prepare filters
         var filters = std.ArrayList([]const u8).init(state.allocator);
         defer filters.deinit();
 
         const filter_len = std.mem.indexOfScalar(u8, &state.filter_buffer, 0) orelse state.filter_buffer.len;
         if (filter_len > 0) {
             const filter = state.allocator.dupe(u8, state.filter_buffer[0..filter_len]) catch {
-                state.allocator.free(url);
-                state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for filter") catch "Memory error";
-                state.has_error = true;
+                // Handle error - could set error state here
                 return;
             };
+            defer state.allocator.free(filter);
             filters.append(filter) catch {
-                state.allocator.free(url);
-                state.allocator.free(filter);
-                state.error_message = state.allocator.dupe(u8, "Failed to add filter") catch "Memory error";
-                state.has_error = true;
                 return;
             };
         }
 
-        // Add initial URL to work queue
-        state.work_mutex.lock();
-        defer state.work_mutex.unlock();
-
-        const initial_item = LinkFinderState.QueueItem{
-            .url = url,
-            .depth = 0,
-            .parent = null,
-        };
-
-        state.work_queue.append(initial_item) catch {
-            state.allocator.free(url);
-            state.error_message = state.allocator.dupe(u8, "Failed to add initial URL to work queue") catch "Memory error";
-            state.has_error = true;
-            return;
-        };
-        state.processed_urls.put(url, {}) catch {};
-
-        // Create parameters for coordinator thread
-        const params = state.allocator.create(WorkerParams) catch {
-            state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for parameters") catch "Memory error";
-            state.has_error = true;
+        // Create LinkFinder instance
+        state.link_finder = LinkFinder.init(state.allocator, state.debug, filters.items) catch {
+            // Handle error - could set error state here
             return;
         };
 
-        params.* = WorkerParams{
-            .state = state,
-            .filters = filters.toOwnedSlice() catch &[_][]const u8{},
-            .debug = state.debug,
+        // Create processing state
+        state.processing_state = LinkFinder.ProcessingState.init(state.allocator);
+
+        // Start processing
+        const config = LinkFinder.MultiThreadedConfig{
+            .recursive = state.recursive,
             .recursion_limit = @intCast(state.recursion_limit),
-            .worker_id = 0, // Coordinator
+            .worker_count = @intCast(state.worker_count),
         };
 
-        // Start coordinator thread
-        state.thread_mutex.lock();
-        state.is_running = true;
-        state.has_error = false;
-        state.should_stop.store(false, .release);
-
-        const thread = std.Thread.spawn(.{}, linkFinderCoordinator, .{params}) catch {
-            state.is_running = false;
-            state.error_message = state.allocator.dupe(u8, "Failed to start coordinator thread") catch "Thread error";
-            state.has_error = true;
-            state.allocator.destroy(params);
-            state.thread_mutex.unlock();
-            return;
-        };
-
-        // Store the coordinator thread so we can join it later
-        state.coordinator_thread = thread;
-        state.thread_mutex.unlock();
-
-        // Signal workers to start
-        state.work_condition.broadcast();
+        const url = state.url_buffer[0..url_len];
+        if (state.link_finder) |*lf| {
+            if (state.processing_state) |*ps| {
+                lf.findLinksMultiThreaded(ps, url, config) catch {
+                    // Handle error - could set error state here
+                    return;
+                };
+            }
+        }
     }
     zgui.endDisabled();
 
     zgui.sameLine(.{});
 
     // Stop button (only shown when running)
-    if (state.is_running) {
+    if (state.isRunning()) {
         if (zgui.button("Stop", .{})) {
             state.clearResults();
         }
@@ -576,7 +360,7 @@ fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
     }
 
     // Status display
-    if (state.is_running) {
+    if (state.isRunning()) {
         zgui.text("Finding links...", .{});
         zgui.sameLine(.{});
 
@@ -587,25 +371,21 @@ fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
         zgui.text("{s}", .{spinner_chars[char_idx]});
 
         // Real-time statistics
-        const found = state.total_found.load(.acquire);
-        const processed = state.total_processed.load(.acquire);
-
-        state.work_mutex.lock();
-        const queue_size = state.work_queue.items.len;
-        state.work_mutex.unlock();
+        const stats = state.getStats();
 
         // Calculate timing information
         const current_time = std.time.milliTimestamp();
-        const elapsed_ms = current_time - state.start_time;
+        const elapsed_ms = current_time - stats.start_time;
         const elapsed_seconds = @as(f64, @floatFromInt(elapsed_ms)) / 1000.0;
 
         // Calculate processing rate
+        var links_per_second: f64 = 0.0;
         if (elapsed_seconds > 0) {
-            state.links_per_second = @as(f64, @floatFromInt(found)) / elapsed_seconds;
+            links_per_second = @as(f64, @floatFromInt(stats.found)) / elapsed_seconds;
         }
 
         // Display main statistics
-        zgui.text("Found: {} | Processed: {} | Queue: {} | Workers: {}", .{ found, processed, queue_size, state.worker_threads.items.len });
+        zgui.text("Found: {} | Processed: {} | Queue: {} | Workers: {}", .{ stats.found, stats.processed, stats.queue_size, stats.worker_count });
 
         // Display timing information
         if (elapsed_ms > 0) {
@@ -614,14 +394,14 @@ fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
             const arena_allocator = arena.allocator();
 
             const duration_str = formatDuration(arena_allocator, elapsed_ms) catch "N/A";
-            zgui.text("Duration: {s} | Rate: {d:.1} links/sec", .{ duration_str, state.links_per_second });
+            zgui.text("Duration: {s} | Rate: {d:.1} links/sec", .{ duration_str, links_per_second });
 
             // Estimate time remaining (rough estimate based on queue size and processing rate)
-            if (queue_size > 0 and processed > 0 and elapsed_seconds > 1.0) {
+            if (stats.queue_size > 0 and stats.processed > 0 and elapsed_seconds > 1.0) {
                 // Calculate pages processed per second instead of links per second for ETA
-                const pages_per_second = @as(f64, @floatFromInt(processed)) / elapsed_seconds;
+                const pages_per_second = @as(f64, @floatFromInt(stats.processed)) / elapsed_seconds;
                 if (pages_per_second > 0.01) {
-                    const estimated_remaining_seconds = @as(f64, @floatFromInt(queue_size)) / pages_per_second;
+                    const estimated_remaining_seconds = @as(f64, @floatFromInt(stats.queue_size)) / pages_per_second;
                     const estimated_remaining_ms = @as(i64, @intFromFloat(estimated_remaining_seconds * 1000.0));
                     const eta_str = formatDuration(arena_allocator, estimated_remaining_ms) catch "N/A";
                     zgui.text("Estimated time remaining: {s} (based on {d:.2} pages/sec)", .{ eta_str, pages_per_second });
@@ -629,73 +409,66 @@ fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
             }
 
             // Progress indicator for recursive searches
-            if (state.recursive and processed > 0) {
-                const progress_ratio = if (queue_size == 0) 1.0 else @as(f32, @floatFromInt(processed)) / @as(f32, @floatFromInt(processed + queue_size));
+            if (state.recursive and stats.processed > 0) {
+                const progress_ratio = if (stats.queue_size == 0) 1.0 else @as(f32, @floatFromInt(stats.processed)) / @as(f32, @floatFromInt(stats.processed + stats.queue_size));
                 zgui.progressBar(.{ .fraction = progress_ratio });
             }
         }
     }
 
-    if (state.has_error) {
-        zgui.textColored(.{ 1.0, 0.0, 0.0, 1.0 }, "Error: {s}", .{state.error_message orelse "Unknown error"});
+    if (state.hasError()) {
+        zgui.textColored(CatppuccinMocha.red, "Error: {s}", .{state.getErrorMessage() orelse "Unknown error"});
     }
 
     // Results display
-    if (state.has_results and state.results.items.len > 0) {
+    const results = state.getResults();
+    if (state.hasResults() and results.len > 0) {
         zgui.separator();
 
         // Show completion summary if not running
-        if (!state.is_running and state.start_time > 0) {
+        if (!state.isRunning()) {
             var arena = std.heap.ArenaAllocator.init(state.allocator);
             defer arena.deinit();
             const arena_allocator = arena.allocator();
 
-            const final_time = state.last_activity_time;
-            const total_duration = final_time - state.start_time;
+            const stats = state.getStats();
+            const total_duration = stats.last_activity_time - stats.start_time;
             const duration_str = formatDuration(arena_allocator, total_duration) catch "N/A";
 
-            const found = state.total_found.load(.acquire);
-            const processed = state.total_processed.load(.acquire);
-
-            zgui.textColored(.{ 0.0, 1.0, 0.0, 1.0 }, "Completed in {s}", .{duration_str});
-            zgui.text("Final stats: {} links found, {} pages processed", .{ found, processed });
+            zgui.textColored(CatppuccinMocha.green, "Completed in {s}", .{duration_str});
+            zgui.text("Final stats: {} links found, {} pages processed", .{ stats.found, stats.processed });
 
             if (total_duration > 0) {
-                const final_rate = @as(f64, @floatFromInt(found)) / (@as(f64, @floatFromInt(total_duration)) / 1000.0);
+                const final_rate = @as(f64, @floatFromInt(stats.found)) / (@as(f64, @floatFromInt(total_duration)) / 1000.0);
                 zgui.text("Average rate: {d:.1} links/sec", .{final_rate});
             }
         }
 
-        zgui.text("Found {} links:", .{state.results.items.len});
+        zgui.text("Found {} links:", .{results.len});
 
         // Calculate remaining height for results
         const available_height = zgui.getContentRegionAvail()[1] - 20; // Leave some padding
         if (zgui.beginChild("results", .{ .w = 0, .h = available_height, .child_flags = .{ .border = true } })) {
-            state.results_mutex.lock();
-            defer state.results_mutex.unlock();
-
-            for (state.results.items, 0..) |result, i| {
+            for (results, 0..) |result, i| {
                 zgui.text("{}: {s}", .{ i + 1, result });
             }
         }
         zgui.endChild();
-    } else if (state.has_results) {
+    } else if (state.hasResults()) {
         zgui.separator();
 
         // Show completion summary even when no results
-        if (!state.is_running and state.start_time > 0) {
+        if (!state.isRunning()) {
             var arena = std.heap.ArenaAllocator.init(state.allocator);
             defer arena.deinit();
             const arena_allocator = arena.allocator();
 
-            const final_time = state.last_activity_time;
-            const total_duration = final_time - state.start_time;
+            const stats = state.getStats();
+            const total_duration = stats.last_activity_time - stats.start_time;
             const duration_str = formatDuration(arena_allocator, total_duration) catch "N/A";
 
-            const processed = state.total_processed.load(.acquire);
-
-            zgui.textColored(.{ 1.0, 1.0, 0.0, 1.0 }, "Completed in {s}", .{duration_str});
-            zgui.text("Final stats: {} pages processed", .{processed});
+            zgui.textColored(CatppuccinMocha.yellow, "Completed in {s}", .{duration_str});
+            zgui.text("Final stats: {} pages processed", .{stats.processed});
         }
 
         zgui.text("No links found.", .{});
@@ -779,6 +552,9 @@ pub fn main() !void {
     });
     defer zgui.backend.deinit();
 
+    // Apply Catppuccin Mocha theme
+    applyCatppuccinMochaTheme();
+
     fz.replace(@src(), "loop");
     var current_window_size: [2]f32 = .{ 1280, 720 };
 
@@ -788,6 +564,12 @@ pub fn main() !void {
         while (c.SDL_PollEvent(&event)) {
             _ = zgui.backend.processEvent(&event);
             if (event.type == c.SDL_EVENT_QUIT) {
+                // Ensure LinkFinder cleanup before exiting
+                if (linkfinder_state.isRunning()) {
+                    linkfinder_state.clearResults();
+                    // Give threads more time to stop properly
+                    std.time.sleep(500 * std.time.ns_per_ms);
+                }
                 break :outer;
             }
 
@@ -812,7 +594,7 @@ pub fn main() !void {
 
         fz.replace(@src(), "begin render pass");
         const color_target_info = c.SDL_GPUColorTargetInfo{
-            .clear_color = .{ .r = 0, .g = 0, .b = 0, .a = 1 },
+            .clear_color = .{ .r = CatppuccinMocha.base[0], .g = CatppuccinMocha.base[1], .b = CatppuccinMocha.base[2], .a = CatppuccinMocha.base[3] },
             .texture = tex,
             .load_op = c.SDL_GPU_LOADOP_CLEAR,
             .store_op = c.SDL_GPU_STOREOP_STORE,

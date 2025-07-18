@@ -5,6 +5,177 @@ const mvzr = @import("mvzr");
 
 const LinkFinder = @This();
 
+// -- Multi-threaded Processing Types -- //
+
+pub const ProcessingState = struct {
+    // Threading
+    worker_threads: std.ArrayList(std.Thread),
+    coordinator_thread: ?std.Thread = null,
+    is_running: bool = false,
+    should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    has_results: bool = false,
+    has_error: bool = false,
+
+    // Work queue and results
+    work_queue: std.ArrayList(QueueItem),
+    results: std.ArrayList([]const u8),
+    processed_urls: std.StringHashMap(void), // To avoid duplicate processing
+    error_message: ?[]const u8 = null,
+
+    // Statistics
+    total_found: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    total_processed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    // Timing information
+    start_time: i64 = 0,
+    last_activity_time: i64 = 0,
+
+    // Threading
+    allocator: std.mem.Allocator,
+    work_mutex: std.Thread.Mutex = .{},
+    results_mutex: std.Thread.Mutex = .{},
+    work_condition: std.Thread.Condition = .{},
+    thread_mutex: std.Thread.Mutex = .{}, // Protect thread management operations
+
+    const QueueItem = struct {
+        url: []const u8,
+        depth: usize,
+        parent: ?[]const u8 = null,
+    };
+
+    pub fn init(allocator: std.mem.Allocator) ProcessingState {
+        return ProcessingState{
+            .worker_threads = std.ArrayList(std.Thread).init(allocator),
+            .work_queue = std.ArrayList(QueueItem).init(allocator),
+            .results = std.ArrayList([]const u8).init(allocator),
+            .processed_urls = std.StringHashMap(void).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *ProcessingState) void {
+        // Stop all threads with more aggressive cleanup
+        self.should_stop.store(true, .release);
+        self.work_condition.broadcast();
+
+        // Give threads time to exit
+        std.time.sleep(300 * std.time.ns_per_ms);
+
+        // Join coordinator thread
+        if (self.coordinator_thread) |thread| {
+            thread.join();
+        }
+
+        // Join worker threads
+        for (self.worker_threads.items) |thread| {
+            thread.join();
+        }
+        self.worker_threads.deinit();
+
+        // Clean up resources
+        self.work_mutex.lock();
+        for (self.work_queue.items) |item| {
+            self.allocator.free(item.url);
+            if (item.parent) |parent| {
+                self.allocator.free(parent);
+            }
+        }
+        self.work_queue.deinit();
+        self.work_mutex.unlock();
+
+        self.results_mutex.lock();
+        for (self.results.items) |result| {
+            self.allocator.free(result);
+        }
+        self.results.deinit();
+        self.results_mutex.unlock();
+
+        self.processed_urls.deinit();
+
+        if (self.error_message) |msg| {
+            self.allocator.free(msg);
+        }
+    }
+
+    pub fn clearResults(self: *ProcessingState) void {
+        self.thread_mutex.lock();
+        defer self.thread_mutex.unlock();
+
+        // Only stop threads if they are actually running
+        if (self.is_running) {
+            // Stop all threads
+            self.should_stop.store(true, .release);
+            self.work_condition.broadcast();
+
+            // Give threads more time to react to the stop signal
+            std.time.sleep(200 * std.time.ns_per_ms);
+
+            // Join coordinator thread if it exists and is joinable
+            if (self.coordinator_thread) |thread| {
+                thread.join();
+                self.coordinator_thread = null;
+            }
+
+            // Join worker threads - they should have already finished due to coordinator cleanup
+            // But we'll try to join them anyway to be safe
+            for (self.worker_threads.items) |thread| {
+                thread.join();
+            }
+            self.worker_threads.clearRetainingCapacity();
+
+            // Mark as no longer running
+            self.is_running = false;
+        } else {
+            // If not running, just clear the thread list
+            self.worker_threads.clearRetainingCapacity();
+            self.coordinator_thread = null;
+        }
+
+        // Clear work queue
+        self.work_mutex.lock();
+        for (self.work_queue.items) |item| {
+            self.allocator.free(item.url);
+            if (item.parent) |parent| {
+                self.allocator.free(parent);
+            }
+        }
+        self.work_queue.clearRetainingCapacity();
+        self.work_mutex.unlock();
+
+        // Clear results
+        self.results_mutex.lock();
+        for (self.results.items) |result| {
+            self.allocator.free(result);
+        }
+        self.results.clearRetainingCapacity();
+        self.results_mutex.unlock();
+
+        // Clear processed URLs
+        self.processed_urls.clearRetainingCapacity();
+
+        // Clear error message
+        if (self.error_message) |msg| {
+            self.allocator.free(msg);
+            self.error_message = null;
+        }
+
+        // Reset state
+        self.has_results = false;
+        self.has_error = false;
+        self.should_stop.store(false, .release);
+        self.total_found.store(0, .release);
+        self.total_processed.store(0, .release);
+        self.start_time = 0;
+        self.last_activity_time = 0;
+    }
+};
+
+pub const MultiThreadedConfig = struct {
+    recursive: bool = false,
+    recursion_limit: usize = 2,
+    worker_count: usize = 4,
+};
+
 // -- Fields -- //
 
 debug: bool,
@@ -247,6 +418,299 @@ pub fn findLinksLeaky(
     }
 
     return sources;
+}
+
+// -- Multi-threaded Processing -- //
+
+const WorkerParams = struct {
+    link_finder: *const LinkFinder,
+    state: *ProcessingState,
+    config: MultiThreadedConfig,
+    worker_id: usize,
+};
+
+fn linkFinderWorker(params: *WorkerParams) void {
+    defer params.state.allocator.destroy(params);
+
+    var arena = std.heap.ArenaAllocator.init(params.state.allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+
+    while (!params.state.should_stop.load(.acquire)) {
+        // Get work item from queue
+        var work_item: ?ProcessingState.QueueItem = null;
+
+        params.state.work_mutex.lock();
+        while (params.state.work_queue.items.len == 0 and !params.state.should_stop.load(.acquire)) {
+            params.state.work_condition.wait(&params.state.work_mutex);
+        }
+
+        if (params.state.should_stop.load(.acquire)) {
+            params.state.work_mutex.unlock();
+            break;
+        }
+
+        if (params.state.work_queue.items.len > 0) {
+            work_item = params.state.work_queue.orderedRemove(0);
+        }
+        params.state.work_mutex.unlock();
+
+        if (work_item) |item| {
+            if (params.link_finder.debug) {
+                std.log.debug("Worker {}: Processing {s} at depth {}", .{ params.worker_id, item.url, item.depth });
+            }
+
+            // Process the URL
+            const entrypoint = Source{
+                .link = item.url,
+                .depth = item.depth,
+                .parent = item.parent,
+            };
+
+            const sources = params.link_finder.findLinksLeaky(arena_allocator, &entrypoint) catch |err| {
+                if (params.link_finder.debug) {
+                    std.log.debug("Worker {}: Error processing {s}: {}", .{ params.worker_id, item.url, err });
+                }
+
+                // Clean up this work item
+                params.state.allocator.free(item.url);
+                if (item.parent) |parent| {
+                    params.state.allocator.free(parent);
+                }
+                continue;
+            };
+
+            // Add results and new work items
+            params.state.results_mutex.lock();
+            var new_links_found: u32 = 0;
+            var iter = sources.sources.valueIterator();
+            while (iter.next()) |source| {
+                // Add to results
+                const result = std.fmt.allocPrint(params.state.allocator, "{s} (depth: {}, found by worker {})", .{ source.link, source.depth, params.worker_id }) catch continue;
+                params.state.results.append(result) catch continue;
+                new_links_found += 1;
+
+                // Add to work queue if recursive and within depth limit
+                // The next depth should be source.depth + 1
+                const next_depth = source.depth + 1;
+                if (params.link_finder.debug) {
+                    std.log.debug("Worker {}: Checking recursion for {s} - current depth: {}, next depth: {}, limit: {}, recursive: {}", .{ params.worker_id, source.link, source.depth, next_depth, params.config.recursion_limit, params.config.recursive });
+                }
+                if (params.config.recursive and next_depth < params.config.recursion_limit) {
+                    // Check if we've already processed this URL
+                    if (!params.state.processed_urls.contains(source.link)) {
+                        if (params.link_finder.debug) {
+                            std.log.debug("Worker {}: Adding {s} to work queue at depth {}", .{ params.worker_id, source.link, next_depth });
+                        }
+                        params.state.work_mutex.lock();
+                        const new_url = params.state.allocator.dupe(u8, source.link) catch {
+                            params.state.work_mutex.unlock();
+                            continue;
+                        };
+                        const new_parent = if (source.parent) |p| params.state.allocator.dupe(u8, p) catch null else null;
+
+                        const new_item = ProcessingState.QueueItem{
+                            .url = new_url,
+                            .depth = next_depth,
+                            .parent = new_parent,
+                        };
+
+                        params.state.work_queue.append(new_item) catch {
+                            params.state.allocator.free(new_url);
+                            if (new_parent) |p| params.state.allocator.free(p);
+                        };
+                        params.state.processed_urls.put(new_url, {}) catch {};
+                        params.state.work_condition.signal();
+                        params.state.work_mutex.unlock();
+                    } else {
+                        if (params.link_finder.debug) {
+                            std.log.debug("Worker {}: Skipping {s} - already processed", .{ params.worker_id, source.link });
+                        }
+                    }
+                } else {
+                    if (params.link_finder.debug) {
+                        std.log.debug("Worker {}: Skipping {s} - recursion check failed", .{ params.worker_id, source.link });
+                    }
+                }
+            }
+            params.state.results_mutex.unlock();
+
+            // Update statistics
+            _ = params.state.total_found.fetchAdd(new_links_found, .acq_rel);
+            _ = params.state.total_processed.fetchAdd(1, .acq_rel);
+
+            // Update activity time for rate calculation
+            params.state.last_activity_time = std.time.milliTimestamp();
+
+            if (params.link_finder.debug) {
+                std.log.debug("Worker {}: Found {} links from {s}", .{ params.worker_id, new_links_found, item.url });
+            }
+
+            // Clean up this work item
+            params.state.allocator.free(item.url);
+            if (item.parent) |parent| {
+                params.state.allocator.free(parent);
+            }
+        }
+    }
+}
+
+// Coordinator thread to manage the overall process
+fn linkFinderCoordinator(params: *WorkerParams) void {
+    defer params.state.allocator.destroy(params);
+
+    // Start worker threads
+    for (0..params.config.worker_count) |i| {
+        const worker_params = params.state.allocator.create(WorkerParams) catch continue;
+        worker_params.* = WorkerParams{
+            .link_finder = params.link_finder,
+            .state = params.state,
+            .config = params.config,
+            .worker_id = i,
+        };
+
+        const thread = std.Thread.spawn(.{}, linkFinderWorker, .{worker_params}) catch {
+            // If thread creation fails, clean up the allocated params
+            params.state.allocator.destroy(worker_params);
+            continue;
+        };
+        params.state.worker_threads.append(thread) catch {
+            // If we can't add the thread to the list, we have a problem
+            // Try to detach it so it can clean up itself
+            thread.detach();
+            continue;
+        };
+    }
+
+    // Wait for all work to be completed
+    var last_queue_size: usize = std.math.maxInt(usize);
+    var idle_cycles: u32 = 0;
+
+    while (!params.state.should_stop.load(.acquire)) {
+        std.time.sleep(100 * std.time.ns_per_ms); // 100ms
+
+        params.state.work_mutex.lock();
+        const current_queue_size = params.state.work_queue.items.len;
+        params.state.work_mutex.unlock();
+
+        if (current_queue_size == 0) {
+            idle_cycles += 1;
+            // If queue has been empty for 500ms, we're probably done
+            if (idle_cycles >= 5) {
+                break;
+            }
+        } else {
+            idle_cycles = 0;
+        }
+
+        if (current_queue_size == last_queue_size and current_queue_size > 0) {
+            // Queue isn't changing, might be stuck
+            idle_cycles += 1;
+            if (idle_cycles >= 10) { // 1 second of no progress
+                break;
+            }
+        }
+
+        last_queue_size = current_queue_size;
+    }
+
+    // Signal completion
+    params.state.should_stop.store(true, .release);
+    params.state.work_condition.broadcast();
+
+    // Wait for all workers to finish
+    for (params.state.worker_threads.items) |thread| {
+        thread.join();
+    }
+
+    // Clear the worker threads list since we've joined them
+    params.state.thread_mutex.lock();
+    params.state.worker_threads.clearRetainingCapacity();
+    params.state.is_running = false;
+    params.state.has_results = true;
+    params.state.thread_mutex.unlock();
+}
+
+/// Start multi-threaded link finding process
+pub fn findLinksMultiThreaded(
+    self: *const LinkFinder,
+    state: *ProcessingState,
+    initial_url: []const u8,
+    config: MultiThreadedConfig,
+) !void {
+    // Ensure we're not already running
+    if (state.is_running) {
+        return error.AlreadyRunning;
+    }
+
+    // Clear previous results (this handles thread cleanup)
+    state.clearResults();
+
+    // Reset statistics and timing
+    state.total_found.store(0, .release);
+    state.total_processed.store(0, .release);
+    state.start_time = std.time.milliTimestamp();
+    state.last_activity_time = state.start_time;
+
+    // Add initial URL to work queue
+    state.work_mutex.lock();
+    defer state.work_mutex.unlock();
+
+    const url = state.allocator.dupe(u8, initial_url) catch {
+        state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for URL") catch "Memory error";
+        state.has_error = true;
+        return error.OutOfMemory;
+    };
+
+    const initial_item = ProcessingState.QueueItem{
+        .url = url,
+        .depth = 0,
+        .parent = null,
+    };
+
+    state.work_queue.append(initial_item) catch {
+        state.allocator.free(url);
+        state.error_message = state.allocator.dupe(u8, "Failed to add initial URL to work queue") catch "Memory error";
+        state.has_error = true;
+        return error.OutOfMemory;
+    };
+    state.processed_urls.put(url, {}) catch {};
+
+    // Create parameters for coordinator thread
+    const params = state.allocator.create(WorkerParams) catch {
+        state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for parameters") catch "Memory error";
+        state.has_error = true;
+        return error.OutOfMemory;
+    };
+
+    params.* = WorkerParams{
+        .link_finder = self,
+        .state = state,
+        .config = config,
+        .worker_id = 0, // Coordinator
+    };
+
+    // Start coordinator thread
+    state.thread_mutex.lock();
+    state.is_running = true;
+    state.has_error = false;
+    state.should_stop.store(false, .release);
+
+    const thread = std.Thread.spawn(.{}, linkFinderCoordinator, .{params}) catch {
+        state.is_running = false;
+        state.error_message = state.allocator.dupe(u8, "Failed to start coordinator thread") catch "Thread error";
+        state.has_error = true;
+        state.allocator.destroy(params);
+        state.thread_mutex.unlock();
+        return error.ThreadSpawnFailed;
+    };
+
+    // Store the coordinator thread so we can join it later
+    state.coordinator_thread = thread;
+    state.thread_mutex.unlock();
+
+    // Signal workers to start
+    state.work_condition.broadcast();
 }
 
 // -- Helpers -- //
