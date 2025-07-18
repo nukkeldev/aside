@@ -613,8 +613,9 @@ pub fn main() !void {
     defer zgui.deinit();
     zgui.backend.init(window.handle, .{
         .device = device.handle,
-        .color_target_format = c.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_INT,
-        .msaa_samples = c.SDL_GPU_SAMPLECOUNT_4,
+        // Keep in-sync with Swapchain format.
+        .color_target_format = c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
+        .msaa_samples = c.SDL_GPU_SAMPLECOUNT_1,
     });
     defer zgui.backend.deinit();
 
