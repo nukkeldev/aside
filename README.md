@@ -24,9 +24,8 @@ Extracts links from HTML URLs in the simplest possible way (pure scanning for
 
 - [x] From URL (Remote)
 - [x] Follows links to a set depth
-- [ ] Link filters
-- [ ] More exit conditions (user, amount, etc.)
-- [ ] Checking if the links are broken
+- [x] Link filters
+- [ ] Reporting status code along with link
 - [ ] Multi-threading
 - [ ] GraphViz output
 
