@@ -185,137 +185,178 @@ fn linkFinderWorker(params: *LinkFinderParams) void {
 
 // -- Main -- //
 
-fn renderLinkFinderWindow(state: *LinkFinderState) void {
-    if (zgui.begin("LinkFinder", .{})) {
-        defer zgui.end();
+fn renderLinkFinderTab(state: *LinkFinderState) void {
+    // Input fields
+    zgui.text("URL:", .{});
+    _ = zgui.inputText("##url", .{ .buf = &state.url_buffer });
 
-        // Input fields
-        zgui.text("URL:", .{});
-        _ = zgui.inputText("##url", .{ .buf = &state.url_buffer });
+    zgui.text("Filter (regex):", .{});
+    _ = zgui.inputText("##filter", .{ .buf = &state.filter_buffer });
 
-        zgui.text("Filter (regex):", .{});
-        _ = zgui.inputText("##filter", .{ .buf = &state.filter_buffer });
+    _ = zgui.checkbox("Recursive", .{ .v = &state.recursive });
+    _ = zgui.checkbox("Debug", .{ .v = &state.debug });
 
-        _ = zgui.checkbox("Recursive", .{ .v = &state.recursive });
-        _ = zgui.checkbox("Debug", .{ .v = &state.debug });
+    if (state.recursive) {
+        _ = zgui.sliderInt("Recursion Limit", .{ .v = &state.recursion_limit, .min = 1, .max = 10 });
+    }
 
-        if (state.recursive) {
-            _ = zgui.sliderInt("Recursion Limit", .{ .v = &state.recursion_limit, .min = 1, .max = 10 });
+    zgui.separator();
+
+    // Control buttons
+    const url_len = std.mem.indexOfScalar(u8, &state.url_buffer, 0) orelse state.url_buffer.len;
+    const has_url = url_len > 0 and
+        (std.mem.startsWith(u8, state.url_buffer[0..url_len], "http://") or
+            std.mem.startsWith(u8, state.url_buffer[0..url_len], "https://"));
+
+    zgui.beginDisabled(.{ .disabled = !has_url or state.is_running });
+    if (zgui.button("Find Links", .{})) {
+        // Join any existing thread first
+        if (state.thread) |thread| {
+            thread.join();
+            state.thread = null;
         }
 
-        zgui.separator();
+        // Clear previous results
+        state.clearResults();
 
-        // Control buttons
-        const url_len = std.mem.indexOfScalar(u8, &state.url_buffer, 0) orelse state.url_buffer.len;
-        const has_url = url_len > 0 and
-            (std.mem.startsWith(u8, state.url_buffer[0..url_len], "http://") or
-                std.mem.startsWith(u8, state.url_buffer[0..url_len], "https://"));
+        // Prepare parameters
+        const url = state.allocator.dupe(u8, state.url_buffer[0..url_len]) catch {
+            state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for URL") catch "Memory error";
+            state.has_error = true;
+            return;
+        };
 
-        zgui.beginDisabled(.{ .disabled = !has_url or state.is_running });
-        if (zgui.button("Find Links", .{})) {
-            // Join any existing thread first
-            if (state.thread) |thread| {
-                thread.join();
-                state.thread = null;
-            }
+        var filters = std.ArrayList([]const u8).init(state.allocator);
+        defer filters.deinit();
 
-            // Clear previous results
-            state.clearResults();
-
-            // Prepare parameters
-            const url = state.allocator.dupe(u8, state.url_buffer[0..url_len]) catch {
-                state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for URL") catch "Memory error";
+        const filter_len = std.mem.indexOfScalar(u8, &state.filter_buffer, 0) orelse state.filter_buffer.len;
+        if (filter_len > 0) {
+            const filter = state.allocator.dupe(u8, state.filter_buffer[0..filter_len]) catch {
+                state.allocator.free(url);
+                state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for filter") catch "Memory error";
                 state.has_error = true;
                 return;
             };
-
-            var filters = std.ArrayList([]const u8).init(state.allocator);
-            defer filters.deinit();
-
-            const filter_len = std.mem.indexOfScalar(u8, &state.filter_buffer, 0) orelse state.filter_buffer.len;
-            if (filter_len > 0) {
-                const filter = state.allocator.dupe(u8, state.filter_buffer[0..filter_len]) catch {
-                    state.allocator.free(url);
-                    state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for filter") catch "Memory error";
-                    state.has_error = true;
-                    return;
-                };
-                filters.append(filter) catch {
-                    state.allocator.free(url);
-                    state.allocator.free(filter);
-                    state.error_message = state.allocator.dupe(u8, "Failed to add filter") catch "Memory error";
-                    state.has_error = true;
-                    return;
-                };
-            }
-
-            // Create parameters for worker thread
-            const params = state.allocator.create(LinkFinderParams) catch {
-                state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for parameters") catch "Memory error";
+            filters.append(filter) catch {
+                state.allocator.free(url);
+                state.allocator.free(filter);
+                state.error_message = state.allocator.dupe(u8, "Failed to add filter") catch "Memory error";
                 state.has_error = true;
-                return;
-            };
-
-            params.* = LinkFinderParams{
-                .state = state,
-                .url = url,
-                .filters = filters.toOwnedSlice() catch &[_][]const u8{},
-                .recursive = state.recursive,
-                .debug = state.debug,
-                .recursion_limit = @intCast(state.recursion_limit),
-            };
-
-            // Start worker thread
-            state.is_running = true;
-            state.thread = std.Thread.spawn(.{}, linkFinderWorker, .{params}) catch {
-                state.is_running = false;
-                state.error_message = state.allocator.dupe(u8, "Failed to start worker thread") catch "Thread error";
-                state.has_error = true;
-                state.allocator.destroy(params);
                 return;
             };
         }
-        zgui.endDisabled();
 
+        // Create parameters for worker thread
+        const params = state.allocator.create(LinkFinderParams) catch {
+            state.error_message = state.allocator.dupe(u8, "Failed to allocate memory for parameters") catch "Memory error";
+            state.has_error = true;
+            return;
+        };
+
+        params.* = LinkFinderParams{
+            .state = state,
+            .url = url,
+            .filters = filters.toOwnedSlice() catch &[_][]const u8{},
+            .recursive = state.recursive,
+            .debug = state.debug,
+            .recursion_limit = @intCast(state.recursion_limit),
+        };
+
+        // Start worker thread
+        state.is_running = true;
+        state.thread = std.Thread.spawn(.{}, linkFinderWorker, .{params}) catch {
+            state.is_running = false;
+            state.error_message = state.allocator.dupe(u8, "Failed to start worker thread") catch "Thread error";
+            state.has_error = true;
+            state.allocator.destroy(params);
+            return;
+        };
+    }
+    zgui.endDisabled();
+
+    zgui.sameLine(.{});
+
+    if (zgui.button("Clear Results", .{})) {
+        state.clearResults();
+    }
+
+    // Status display
+    if (state.is_running) {
+        zgui.text("Finding links...", .{});
         zgui.sameLine(.{});
 
-        if (zgui.button("Clear Results", .{})) {
-            state.clearResults();
-        }
+        // Simple spinning indicator
+        const time = @as(f32, @floatFromInt(@rem(std.time.milliTimestamp(), 2000))) / 2000.0;
+        const spinner_chars = [_][]const u8{ "|", "/", "-", "\\" };
+        const char_idx = @as(usize, @intFromFloat(time * 4)) % 4;
+        zgui.text("{s}", .{spinner_chars[char_idx]});
+    }
 
-        // Status display
-        if (state.is_running) {
-            zgui.text("Finding links...", .{});
-            zgui.sameLine(.{});
+    if (state.has_error) {
+        zgui.textColored(.{ 1.0, 0.0, 0.0, 1.0 }, "Error: {s}", .{state.error_message orelse "Unknown error"});
+    }
 
-            // Simple spinning indicator
-            const time = @as(f32, @floatFromInt(@rem(std.time.milliTimestamp(), 2000))) / 2000.0;
-            const spinner_chars = [_][]const u8{ "|", "/", "-", "\\" };
-            const char_idx = @as(usize, @intFromFloat(time * 4)) % 4;
-            zgui.text("{s}", .{spinner_chars[char_idx]});
-        }
+    // Results display
+    if (state.has_results and state.results.items.len > 0) {
+        zgui.separator();
+        zgui.text("Found {} links:", .{state.results.items.len});
 
-        if (state.has_error) {
-            zgui.textColored(.{ 1.0, 0.0, 0.0, 1.0 }, "Error: {s}", .{state.error_message orelse "Unknown error"});
-        }
+        // Calculate remaining height for results
+        const available_height = zgui.getContentRegionAvail()[1] - 20; // Leave some padding
+        if (zgui.beginChild("results", .{ .w = 0, .h = available_height, .child_flags = .{ .border = true } })) {
+            state.mutex.lock();
+            defer state.mutex.unlock();
 
-        // Results display
-        if (state.has_results and state.results.items.len > 0) {
-            zgui.separator();
-            zgui.text("Found {} links:", .{state.results.items.len});
-
-            if (zgui.beginChild("results", .{ .w = 0, .h = 200, .child_flags = .{ .border = true } })) {
-                state.mutex.lock();
-                defer state.mutex.unlock();
-
-                for (state.results.items, 0..) |result, i| {
-                    zgui.text("{}: {s}", .{ i + 1, result });
-                }
+            for (state.results.items, 0..) |result, i| {
+                zgui.text("{}: {s}", .{ i + 1, result });
             }
-            zgui.endChild();
-        } else if (state.has_results) {
-            zgui.separator();
-            zgui.text("No links found.", .{});
+        }
+        zgui.endChild();
+    } else if (state.has_results) {
+        zgui.separator();
+        zgui.text("No links found.", .{});
+    }
+}
+
+fn renderMainWindow(linkfinder_state: *LinkFinderState, window_size: [2]f32) void {
+    // Create fullscreen window
+    zgui.setNextWindowPos(.{ .x = 0, .y = 0 });
+    zgui.setNextWindowSize(.{ .w = window_size[0], .h = window_size[1] });
+
+    const window_flags = zgui.WindowFlags{
+        .no_title_bar = true,
+        .no_resize = true,
+        .no_move = true,
+        .no_collapse = true,
+        .no_scrollbar = false,
+        .no_scroll_with_mouse = false,
+    };
+
+    if (zgui.begin("Main", .{ .flags = window_flags })) {
+        defer zgui.end();
+
+        // Create tab bar
+        if (zgui.beginTabBar("MainTabBar", .{})) {
+            defer zgui.endTabBar();
+
+            // LinkFinder tab
+            if (zgui.beginTabItem("LinkFinder", .{})) {
+                defer zgui.endTabItem();
+                renderLinkFinderTab(linkfinder_state);
+            }
+
+            // Add more tabs here in the future
+            if (zgui.beginTabItem("About", .{})) {
+                defer zgui.endTabItem();
+                zgui.text("Aside - Web Link Analysis Tool", .{});
+                zgui.separator();
+                zgui.text("Built with Zig and ImGui", .{});
+                zgui.text("Features:", .{});
+                zgui.bulletText("Extract links from web pages", .{});
+                zgui.bulletText("Recursive link following", .{});
+                zgui.bulletText("Regex filtering", .{});
+                zgui.bulletText("Multi-threaded processing", .{});
+            }
         }
     }
 }
@@ -338,7 +379,7 @@ pub fn main() !void {
 
     // Create the window and device.
     fz.replace(@src(), "create window");
-    const window = try SDL.Window.create(allocator, "Garden Demo", [2]u32{ 1024, 1024 }, [2]u32{ c.SDL_WINDOWPOS_CENTERED, c.SDL_WINDOWPOS_CENTERED });
+    const window = try SDL.Window.create(allocator, "Aside - Web Link Analysis Tool", [2]u32{ 1280, 720 }, [2]u32{ c.SDL_WINDOWPOS_CENTERED, c.SDL_WINDOWPOS_CENTERED });
 
     fz.replace(@src(), "create device");
     const device = try SDL.GPUDevice.createAndClaimForWindow(allocator, c.SDL_GPU_SHADERFORMAT_SPIRV, false, null, &window);
@@ -355,6 +396,8 @@ pub fn main() !void {
     defer zgui.backend.deinit();
 
     fz.replace(@src(), "loop");
+    var current_window_size: [2]f32 = .{ 1280, 720 };
+
     outer: while (true) {
         fz.push(@src(), "poll events");
         var event: c.SDL_Event = undefined;
@@ -362,6 +405,12 @@ pub fn main() !void {
             _ = zgui.backend.processEvent(&event);
             if (event.type == c.SDL_EVENT_QUIT) {
                 break :outer;
+            }
+
+            // Handle window resize
+            if (event.type == c.SDL_EVENT_WINDOW_RESIZED) {
+                current_window_size[0] = @floatFromInt(event.window.data1);
+                current_window_size[1] = @floatFromInt(event.window.data2);
             }
         }
 
@@ -387,10 +436,10 @@ pub fn main() !void {
 
         const rpass = try SDL.GPURenderPass.begin(&cmd, &.{color_target_info}, null);
 
-        zgui.backend.newFrame(1280, 720, 1.0);
+        zgui.backend.newFrame(@intFromFloat(current_window_size[0]), @intFromFloat(current_window_size[1]), 1.0);
 
-        // Render LinkFinder window
-        renderLinkFinderWindow(&linkfinder_state);
+        // Render main window with tabs
+        renderMainWindow(&linkfinder_state, current_window_size);
 
         zgui.render();
         zgui.backend.prepareDrawData(cmd.handle);
