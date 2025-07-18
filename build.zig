@@ -23,12 +23,12 @@ pub fn build(b: *std.Build) void {
 
     // ---
 
-    const httpz = b.dependency("httpz", .{
+    const mvzr = b.dependency("mvzr", .{
         .target = target,
         .optimize = optimize,
     });
 
-    mod.addImport("httpz", httpz.module("httpz"));
+    mod.addImport("mvzr", mvzr.module("mvzr"));
 
     // ---
 

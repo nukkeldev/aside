@@ -1,13 +1,17 @@
 .{
     .name = .aside,
-    .version = "0.0.0",
+    .version = "0.0.3",
     .fingerprint = 0x60b56d49958ab2af, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.15.0-dev.1034+bd97b6618",
+    .minimum_zig_version = "0.14.1",
     .dependencies = .{
         // TODO: This uses a fork of http.zig that is updated for the removal of 0.14 deprecations.
         .httpz = .{
             .url = "git+https://github.com/mrjbq7/http.zig?ref=deprecated#1e02909d08579f5e5d9cdbc72b26cfc2206dda02",
             .hash = "httpz-0.0.0-PNVzrHi2BgAdzcNC1S5N2T4Z24h7R84oDcNSSv1-FbsJ",
+        },
+        .mvzr = .{
+            .url = "git+https://github.com/mnemnion/mvzr#39af128ae1052560941b2b5d56901ec25de5f602",
+            .hash = "mvzr-0.3.6-ZSOky1htAQC0YwOhy3j1-dENHZ3tIfeKfCEu5_3XT9nS",
         },
     },
     .paths = .{

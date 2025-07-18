@@ -1,5 +1,5 @@
 const std = @import("std");
-const httpz = @import("httpz");
+const mvzr = @import("mvzr");
 
 // -- Main -- //
 
@@ -38,6 +38,8 @@ fn linkFinderMain(allocator: std.mem.Allocator, args: []const []const u8) !void 
     var recursion_limit: usize = 2;
     var debug: bool = false;
     var url_opt: ?[]const u8 = null;
+    var filters = std.ArrayList([]const u8).init(allocator);
+    defer filters.deinit();
 
     // ---
 
@@ -55,6 +57,14 @@ fn linkFinderMain(allocator: std.mem.Allocator, args: []const []const u8) !void 
                 recursion_limit = try std.fmt.parseInt(usize, args[i], 10);
             } else {
                 std.log.err("--limit requires a value", .{});
+                return;
+            }
+        } else if (std.mem.eql(u8, arg, "--filter") or std.mem.eql(u8, arg, "-F")) {
+            if (i + 1 < args.len) {
+                i += 1;
+                try filters.append(args[i]);
+            } else {
+                std.log.err("--filter requires a regex pattern", .{});
                 return;
             }
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
@@ -86,11 +96,12 @@ fn linkFinderMain(allocator: std.mem.Allocator, args: []const []const u8) !void 
 
     // ---
 
-    const link_finder = LinkFinder.init(debug);
-
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const arena_allocator = arena.allocator();
+
+    const link_finder = try LinkFinder.init(arena_allocator, debug, filters.items);
+    defer link_finder.deinit();
 
     const entrypoint = LinkFinder.Source{
         .link = url,
@@ -98,6 +109,13 @@ fn linkFinderMain(allocator: std.mem.Allocator, args: []const []const u8) !void 
     };
 
     std.log.info("Fetching links from: {s}", .{url});
+    if (filters.items.len > 0) {
+        std.log.info("Using {} filter(s):", .{filters.items.len});
+        for (filters.items, 0..) |filter, idx| {
+            std.log.info("  {}: {s}", .{ idx + 1, filter });
+        }
+    }
+
     const sources = if (recursive)
         try link_finder.findLinksLeakyRecurse(arena_allocator, entrypoint, recursion_limit)
     else
@@ -123,6 +141,8 @@ fn linkFinderMain(allocator: std.mem.Allocator, args: []const []const u8) !void 
 
 pub const LinkFinder = struct {
     debug: bool,
+    filters: []mvzr.Regex,
+    allocator: std.mem.Allocator,
 
     // -- Types -- //
 
@@ -133,8 +153,8 @@ pub const LinkFinder = struct {
         depth: usize = 0,
         link: []const u8,
 
-        pub fn format(source: *const Source, writer: *std.io.Writer) std.io.Writer.Error!void {
-            try writer.print("Source(url: {s}, depth: {})", .{ source.link, source.depth });
+        pub fn format(value: *const Source, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            try writer.print("Source(url: {s}, depth: {})", .{ value.link, value.depth });
         }
 
         pub fn dupe(self: *const Source, allocator: std.mem.Allocator) !Source {
@@ -164,11 +184,44 @@ pub const LinkFinder = struct {
 
     // -- Initialization -- //
 
-    pub fn init(debug: bool) LinkFinder {
-        return LinkFinder{ .debug = debug };
+    pub fn init(allocator: std.mem.Allocator, debug: bool, filter_patterns: []const []const u8) !LinkFinder {
+        var filters = try allocator.alloc(mvzr.Regex, filter_patterns.len);
+
+        var i: usize = 0;
+        for (filter_patterns) |pattern| {
+            filters[i] = mvzr.Regex.compile(pattern) orelse {
+                std.log.err("Failed to compiled regex pattern '{s}'! Skipping.", .{pattern});
+                continue;
+            };
+            i += 1;
+        }
+
+        return LinkFinder{
+            .debug = debug,
+            .filters = filters[0..i],
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *const LinkFinder) void {
+        self.allocator.free(self.filters);
     }
 
     // -- Link Finding -- //
+
+    fn matchesFilter(self: *const LinkFinder, link: []const u8) bool {
+        if (self.filters.len == 0) return true;
+
+        for (self.filters) |*regex| {
+            if (regex.match(link)) |match| {
+                if (self.debug) std.log.debug("Link '{s}' matches filter at {}.", .{ link, match });
+                return true;
+            }
+        }
+
+        if (self.debug) std.log.debug("Link '{s}' does not match any filter", .{link});
+        return false;
+    }
 
     pub fn findLinksLeakyRecurse(
         lf: *const LinkFinder,
@@ -255,36 +308,41 @@ pub const LinkFinder = struct {
                             std.log.debug("Found link from {} to {}: \"{s}\".", .{ offset - link_end, offset, link });
                         }
 
-                        try sources.sources.put(link, .{
-                            .depth = source.depth + 1,
-                            .link = outer: {
-                                const is_absolute = std.mem.startsWith(u8, link, "http://") or std.mem.startsWith(u8, link, "https://");
-                                const is_root_relative = std.mem.startsWith(u8, link, "/");
+                        const final_link = outer: {
+                            const is_absolute = std.mem.startsWith(u8, link, "http://") or std.mem.startsWith(u8, link, "https://");
+                            const is_root_relative = std.mem.startsWith(u8, link, "/");
 
-                                if (is_absolute) {
-                                    if (lf.debug) std.log.debug("Adding absolute link: {s}", .{link});
-                                    break :outer link;
+                            if (is_absolute) {
+                                if (lf.debug) std.log.debug("Adding absolute link: {s}", .{link});
+                                break :outer link;
+                            } else {
+                                if (is_root_relative) {
+                                    // Root-relative URL: combine with domain root
+                                    const domain_root = extractDomainRoot(source.link);
+                                    const full_link = try std.fmt.allocPrint(allocator, "{s}{s}", .{ domain_root, link });
+
+                                    if (lf.debug) std.log.debug("Adding root-relative link: {s}", .{full_link});
+                                    break :outer full_link;
                                 } else {
-                                    if (is_root_relative) {
-                                        // Root-relative URL: combine with domain root
-                                        const domain_root = extractDomainRoot(source.link);
-                                        const full_link = try std.fmt.allocPrint(allocator, "{s}{s}", .{ domain_root, link });
+                                    // Path-relative URL: combine with current directory
+                                    const last_slash = std.mem.lastIndexOf(u8, source.link, "/") orelse source.link.len;
+                                    const base_dir = source.link[0 .. last_slash + 1];
+                                    const full_link = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_dir, link });
 
-                                        if (lf.debug) std.log.debug("Adding root-relative link: {s}", .{full_link});
-                                        break :outer full_link;
-                                    } else {
-                                        // Path-relative URL: combine with current directory
-                                        const last_slash = std.mem.lastIndexOf(u8, source.link, "/") orelse source.link.len;
-                                        const base_dir = source.link[0 .. last_slash + 1];
-                                        const full_link = try std.fmt.allocPrint(allocator, "{s}{s}", .{ base_dir, link });
-
-                                        if (lf.debug) std.log.debug("Adding path-relative link: {s}", .{full_link});
-                                        break :outer full_link;
-                                    }
+                                    if (lf.debug) std.log.debug("Adding path-relative link: {s}", .{full_link});
+                                    break :outer full_link;
                                 }
-                            },
-                            .parent = source.link,
-                        });
+                            }
+                        };
+
+                        // Only add the link if it matches our filters
+                        if (lf.matchesFilter(final_link)) {
+                            try sources.sources.put(final_link, .{
+                                .depth = source.depth + 1,
+                                .link = final_link,
+                                .parent = source.link,
+                            });
+                        }
                     } else {
                         std.log.err("No closing quote found for href attribute.", .{});
                         continue;
@@ -474,7 +532,7 @@ fn printUsage() void {
         \\Usage: aside <COMMAND> [OPTIONS] [ARGS]
         \\
         \\Available Commands:
-        \\  link-finder, lf          Find links in HTML content from remote URLs
+        \\  link-finder, lf          Find and filter links in HTML content from remote URLs
         \\
         \\Global Options:
         \\  -h, --help               Show this help message
@@ -483,7 +541,7 @@ fn printUsage() void {
         \\
         \\Examples:
         \\  aside lf https://example.com
-        \\  aside link-finder --recursive --limit 3 https://example.com
+        \\  aside link-finder --recursive --filter ".*\\.pdf$" https://example.com
         \\  aside --help
         \\
     ;
@@ -499,6 +557,7 @@ fn printLinkFinderUsage() void {
         \\Options:
         \\  -r, --recursive          Follow links recursively
         \\  -l, --limit <NUM>        Maximum recursion depth (default: 2)
+        \\  -F, --filter <PATTERN>   Only follow/extract links matching regex pattern (can be used multiple times)
         \\  -d, --debug              Enable debug output
         \\  -h, --help               Show this help message
         \\
@@ -508,6 +567,8 @@ fn printLinkFinderUsage() void {
         \\Examples:
         \\  aside lf https://example.com
         \\  aside link-finder --recursive --limit 3 https://example.com
+        \\  aside lf --filter ".*\\.pdf$" https://example.com
+        \\  aside lf --filter "github\\.com" --filter ".*\\.zip$" --recursive https://example.com
         \\  aside lf --debug --recursive https://example.com
         \\  aside lf --help
         \\
