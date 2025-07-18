@@ -23,12 +23,39 @@ pub fn build(b: *std.Build) void {
 
     // ---
 
+    const gui_mod = b.createModule(.{
+        .root_source_file = b.path("src/gui.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const gui_exe = b.addExecutable(.{
+        .name = "aside-gui",
+        .root_module = gui_mod,
+    });
+
+    b.installArtifact(gui_exe);
+
+    // ---
+
     const mvzr = b.dependency("mvzr", .{
         .target = target,
         .optimize = optimize,
     });
 
     cli_mod.addImport("mvzr", mvzr.module("mvzr"));
+    gui_mod.addImport("mvzr", mvzr.module("mvzr"));
+
+    gui_mod.linkLibrary(b.dependency("sdl", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    }).artifact("SDL3"));
+
+    gui_mod.addImport("zgui", b.dependency("zgui", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .backend = .sdl3, // TODO: Could switch to sdl3_gpu if needed.
+    }).module("root"));
 
     // ---
 
@@ -41,6 +68,19 @@ pub fn build(b: *std.Build) void {
 
     if (b.args) |args| {
         run_cli_cmd.addArgs(args);
+    }
+
+    // ---
+
+    const run_gui_step = b.step("run-gui", "Run the gui");
+
+    const run_gui_cmd = b.addRunArtifact(gui_exe);
+    run_gui_step.dependOn(&run_gui_cmd.step);
+
+    run_gui_cmd.step.dependOn(b.getInstallStep());
+
+    if (b.args) |args| {
+        run_gui_cmd.addArgs(args);
     }
 
     // ---
