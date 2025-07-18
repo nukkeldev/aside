@@ -45,6 +45,11 @@ pub fn build(b: *std.Build) void {
 
     // ---
 
+    const check = b.step("check", "Compiles without installation.");
+    check.dependOn(&exe.step);
+
+    // ---
+
     const tests = b.addTest(.{
         .root_module = mod,
         .filters = b.args orelse &.{},

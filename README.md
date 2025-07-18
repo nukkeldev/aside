@@ -19,26 +19,21 @@
 
 ### Link Finder (`link-finder` / `lf`)
 
-Extracts links from HTML content in the simplest possible way (pure scanning for 
-`<a>` tags), with support for both local files, remote URLs, and link following
-(BFS).
+Extracts links from HTML URLs in the simplest possible way (pure scanning for 
+`<a>` tags); supports link following (BFS).
 
-- [x] From HTML file in memory (Local)
-    - [ ] Follows relative links only if a URL for the local document has been
-          provided. Filesystem awareness is NYI.
 - [x] From URL (Remote)
 - [x] Follows links to a set depth
-- [ ] Filesystem Awareness (sibling traversal)
 - [ ] Link filters
 - [ ] More exit conditions (user, amount, etc.)
+- [ ] Checking if the links are broken
+- [ ] Multi-threading
+- [ ] GraphViz output
 
 **Usage:**
 ```bash
 # Basic link extraction from URL
 aside lf https://example.com
-
-# Extract links from local HTML file
-aside lf --file index.html
 
 # Recursive link following with custom depth
 aside link-finder --recursive --limit 3 https://example.com
