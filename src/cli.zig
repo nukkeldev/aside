@@ -1,5 +1,5 @@
 const std = @import("std");
-const LinkFinder = @import("LinkFinder.zig");
+const LinkFinder = @import("tools/LinkFinder.zig");
 
 // -- Main -- //
 
