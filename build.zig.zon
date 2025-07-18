@@ -16,6 +16,10 @@
             .url = "git+https://github.com/zig-gamedev/zgui#b2f29f14bce688ec90a26a9a7906543d98e0f8a0",
             .hash = "zgui-0.6.0-dev--L6sZBDaaAAs88V6Y7ALQ_OU1KHG88hUYlKlrJdMEGsD",
         },
+        .tracy = .{
+            .url = "git+https://github.com/wolfpld/tracy.git#abbc35793e245510a9b33288cfdc2d68a894c535",
+            .hash = "N-V-__8AAJNvPwGqa0WLAedW1M6YWG6xwzU5HD-UhrQ1Z7Eh",
+        },
     },
     .paths = .{
         "build.zig",

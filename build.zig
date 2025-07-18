@@ -1,10 +1,52 @@
 const std = @import("std");
 
+// Taken mostly from nukkeldev/garden
+// ---
+
+/// Non-standard options specified by the user when invoking `zig build`.
+const RawBuildOptions = struct {
+    enable_tracy: bool,
+    enable_tracy_callstack: bool,
+};
+
+// Standard Build Options
+var target: std.Build.ResolvedTarget = undefined;
+var optimize: std.builtin.OptimizeMode = undefined;
+
+var raw_build_opts: RawBuildOptions = undefined;
+var build_opts_mod: *std.Build.Module = undefined;
+
+// -- Functions -- //
+
+/// Turns the raw build options to an import-able module.
+pub fn createBuildOptions(b: *std.Build) void {
+    const options = b.addOptions();
+
+    options.addOption(bool, "enable_tracy", raw_build_opts.enable_tracy);
+    options.addOption(bool, "enable_tracy_callstack", raw_build_opts.enable_tracy_callstack);
+
+    build_opts_mod = options.createModule();
+}
+
 pub fn build(b: *std.Build) void {
     // ---
 
-    const target = b.standardTargetOptions(.{});
-    const optimize = b.standardOptimizeOption(.{});
+    target = b.standardTargetOptions(.{});
+    optimize = b.standardOptimizeOption(.{});
+
+    raw_build_opts = RawBuildOptions{
+        .enable_tracy = b.option(
+            bool,
+            "enable-tracy",
+            "Whether to enable tracy profiling (low overhead) [default = false]",
+        ) orelse false,
+        .enable_tracy_callstack = b.option(
+            bool,
+            "enable-tracy-callstack",
+            "Enforce callstack collection for tracy regions [default = false]",
+        ) orelse false,
+    };
+    createBuildOptions(b);
 
     // ---
 
@@ -38,6 +80,9 @@ pub fn build(b: *std.Build) void {
 
     // ---
 
+    cli_mod.addImport("build-opts", build_opts_mod);
+    gui_mod.addImport("build-opts", build_opts_mod);
+
     const mvzr = b.dependency("mvzr", .{
         .target = target,
         .optimize = optimize,
@@ -51,11 +96,41 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseFast,
     }).artifact("SDL3"));
 
-    gui_mod.addImport("zgui", b.dependency("zgui", .{
+    const zgui = b.dependency("zgui", .{
         .target = target,
         .optimize = .ReleaseFast,
-        .backend = .sdl3, // TODO: Could switch to sdl3_gpu if needed.
-    }).module("root"));
+        .backend = .sdl3_gpu,
+    });
+    gui_mod.addImport("zgui", zgui.module("root"));
+    gui_mod.linkLibrary(zgui.artifact("imgui"));
+
+    if (raw_build_opts.enable_tracy) {
+        const src = b.dependency("tracy", .{}).path(".");
+        const mod_ = b.createModule(.{
+            .target = target,
+            .optimize = .ReleaseFast,
+            .link_libcpp = true,
+        });
+
+        mod_.addCMacro("TRACY_ENABLE", "");
+        mod_.addIncludePath(src.path(b, "public"));
+        mod_.addCSourceFile(.{ .file = src.path(b, "public/TracyClient.cpp") });
+
+        if (target.result.os.tag == .windows) {
+            mod_.linkSystemLibrary("dbghelp", .{ .needed = true });
+            mod_.linkSystemLibrary("ws2_32", .{ .needed = true });
+        }
+
+        const lib = b.addLibrary(.{
+            .name = "tracy",
+            .root_module = mod_,
+            .linkage = .static,
+        });
+        lib.installHeadersDirectory(src.path(b, "public"), "", .{ .include_extensions = &.{".h"} });
+
+        cli_mod.linkLibrary(lib);
+        gui_mod.linkLibrary(lib);
+    }
 
     // ---
 
