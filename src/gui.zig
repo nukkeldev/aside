@@ -28,9 +28,15 @@ window: SDL.Window,
 device: SDL.GPUDevice,
 link_finder_gui: @import("gui/LinkFinderGui.zig"),
 canvas_gui: @import("gui/CanvasGui.zig"),
+fractals_gui: @import("gui/FractalsGui.zig"),
 
 current_window_size: [2]f32,
 should_quit: bool,
+
+// Sidebar state
+sidebar_collapsed: bool,
+sidebar_width: f32,
+current_tab: enum { link_finder, canvas, fractals, about },
 
 last_update_ns: u64,
 next_update_ns: u64,
@@ -66,13 +72,20 @@ fn init(allocator: std.mem.Allocator) !App {
     // Initialize Canvas GUI
     const canvas_gui = @import("gui/CanvasGui.zig").init(allocator);
 
+    // Initialize Fractals GUI
+    const fractals_gui = try @import("gui/FractalsGui.zig").init(allocator);
+
     return App{
         .allocator = allocator,
         .window = window,
         .device = device,
         .link_finder_gui = link_finder_gui,
         .canvas_gui = canvas_gui,
+        .fractals_gui = fractals_gui,
         .current_window_size = .{ 1280, 720 },
+        .sidebar_collapsed = false,
+        .sidebar_width = 250.0,
+        .current_tab = .link_finder,
         .last_update_ns = 0,
         .next_update_ns = 0,
         .last_render_ns = 0,
@@ -84,6 +97,7 @@ fn init(allocator: std.mem.Allocator) !App {
 fn deinit(self: *App) void {
     self.link_finder_gui.deinit();
     self.canvas_gui.deinit();
+    self.fractals_gui.deinit();
     zgui.backend.deinit();
     zgui.deinit();
 }
@@ -172,36 +186,127 @@ fn renderMainWindow(self: *App) !void {
     if (zgui.begin("Main", .{ .flags = window_flags })) {
         defer zgui.end();
 
-        // Create tab bar
-        if (zgui.beginTabBar("MainTabBar", .{})) {
-            defer zgui.endTabBar();
+        // Render sidebar
+        try self.renderSidebar();
 
-            // LinkFinder tab
-            if (zgui.beginTabItem("LinkFinder", .{})) {
-                defer zgui.endTabItem();
-                try self.link_finder_gui.render();
+        // Render main content area
+        try self.renderMainContent();
+    }
+}
+
+fn renderSidebar(self: *App) !void {
+    // Calculate sidebar position and size
+    const actual_sidebar_width = if (self.sidebar_collapsed) 50.0 else self.sidebar_width;
+
+    zgui.setNextWindowPos(.{ .x = 0, .y = 0 });
+    zgui.setNextWindowSize(.{ .w = actual_sidebar_width, .h = self.current_window_size[1] });
+
+    const sidebar_flags = zgui.WindowFlags{
+        .no_title_bar = true,
+        .no_resize = true,
+        .no_move = true,
+        .no_collapse = true,
+        .no_scrollbar = self.sidebar_collapsed,
+    };
+
+    if (zgui.begin("Sidebar", .{ .flags = sidebar_flags })) {
+        defer zgui.end();
+
+        // Toggle button
+        if (self.sidebar_collapsed) {
+            if (zgui.button(">>", .{ .w = 40, .h = 30 })) {
+                self.sidebar_collapsed = false;
+            }
+        } else {
+            if (zgui.button("<<", .{ .w = 40, .h = 30 })) {
+                self.sidebar_collapsed = true;
             }
 
-            // Canvas tab
-            if (zgui.beginTabItem("Canvas", .{})) {
-                defer zgui.endTabItem();
-                try self.canvas_gui.render();
+            zgui.separator();
+
+            // Analysis Tools Section
+            if (zgui.collapsingHeader("Analysis Tools", .{ .default_open = true })) {
+                if (zgui.selectable("Link Finder", .{ .selected = self.current_tab == .link_finder })) {
+                    self.current_tab = .link_finder;
+                }
             }
 
-            // Add more tabs here in the future
-            if (zgui.beginTabItem("About", .{})) {
-                defer zgui.endTabItem();
-                zgui.text("Aside - Web Link Analysis Tool", .{});
-                zgui.separator();
-                zgui.text("Built with Zig and ImGui", .{});
-                zgui.text("Features:", .{});
-                zgui.bulletText("Extract links from web pages", .{});
-                zgui.bulletText("Recursive link following", .{});
-                zgui.bulletText("Regex filtering", .{});
-                zgui.bulletText("Multi-threaded processing", .{});
+            zgui.spacing();
+
+            // Creative Tools Section
+            if (zgui.collapsingHeader("Creative Tools", .{ .default_open = true })) {
+                if (zgui.selectable("Canvas", .{ .selected = self.current_tab == .canvas })) {
+                    self.current_tab = .canvas;
+                }
+
+                if (zgui.selectable("Fractals", .{ .selected = self.current_tab == .fractals })) {
+                    self.current_tab = .fractals;
+                }
+            }
+
+            zgui.spacing();
+
+            // Information Section
+            if (zgui.collapsingHeader("Information", .{ .default_open = false })) {
+                if (zgui.selectable("About", .{ .selected = self.current_tab == .about })) {
+                    self.current_tab = .about;
+                }
             }
         }
     }
+}
+
+fn renderMainContent(self: *App) !void {
+    // Calculate main content area position and size
+    const sidebar_width = if (self.sidebar_collapsed) 50.0 else self.sidebar_width;
+    const content_x = sidebar_width;
+    const content_width = self.current_window_size[0] - sidebar_width;
+
+    zgui.setNextWindowPos(.{ .x = content_x, .y = 0 });
+    zgui.setNextWindowSize(.{ .w = content_width, .h = self.current_window_size[1] });
+
+    const content_flags = zgui.WindowFlags{
+        .no_title_bar = true,
+        .no_resize = true,
+        .no_move = true,
+        .no_collapse = true,
+    };
+
+    if (zgui.begin("MainContent", .{ .flags = content_flags })) {
+        defer zgui.end();
+
+        // Render content based on current tab
+        switch (self.current_tab) {
+            .link_finder => try self.link_finder_gui.render(),
+            .canvas => try self.canvas_gui.render(),
+            .fractals => try self.fractals_gui.render(),
+            .about => self.renderAboutContent(),
+        }
+    }
+}
+
+fn renderAboutContent(self: *App) void {
+    _ = self; // suppress unused variable warning
+
+    zgui.text("Aside - Multipurpose Analysis & Creative Tool", .{});
+    zgui.separator();
+
+    zgui.spacing();
+    zgui.text("Built with Zig and ImGui", .{});
+
+    zgui.spacing();
+    zgui.textColored(.{ 0.7, 0.9, 1.0, 1.0 }, "Analysis Tools:", .{});
+    zgui.bulletText("Extract links from web pages", .{});
+    zgui.bulletText("Recursive link following", .{});
+    zgui.bulletText("Regex filtering", .{});
+    zgui.bulletText("Multi-threaded processing", .{});
+
+    zgui.spacing();
+    zgui.textColored(.{ 1.0, 0.8, 0.6, 1.0 }, "Creative Tools:", .{});
+    zgui.bulletText("Digital drawing canvas with zoom & pan", .{});
+    zgui.bulletText("Mathematical fractal generation", .{});
+    zgui.bulletText("Multiple fractal types (Mandelbrot, Julia, Sierpinski, Burning Ship)", .{});
+    zgui.bulletText("Customizable color schemes and parameters", .{});
 }
 
 // -- Main Loop -- //
