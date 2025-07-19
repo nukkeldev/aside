@@ -384,11 +384,11 @@ pub fn findLinksLeaky(
                         });
                     }
                 } else {
-                    std.log.err("No closing quote found for href attribute.", .{});
+                    if (lf.debug) std.log.err("No closing quote found for href attribute.", .{});
                     continue;
                 }
             } else {
-                std.log.err("No href attribute found in <a> tag.", .{});
+                if (lf.debug) std.log.err("No href attribute found in <a> tag.", .{});
                 continue;
             }
 
@@ -398,7 +398,7 @@ pub fn findLinksLeaky(
                     std.log.debug("Found closing </a> tag at offset {}.", .{offset});
                 }
             } else {
-                std.log.err("No closing tag found for opening <a>.", .{});
+                if (lf.debug) std.log.err("No closing tag found for opening <a>.", .{});
                 break;
             }
         } else {
@@ -642,6 +642,12 @@ pub fn findLinksMultiThreaded(
     if (state.is_running) {
         return error.AlreadyRunning;
     }
+
+    // Log the start of the process
+    std.log.info("Starting multi-threaded link finding for {s} with config: {}", .{
+        initial_url,
+        config,
+    });
 
     // Clear previous results (this handles thread cleanup)
     state.clearResults();
