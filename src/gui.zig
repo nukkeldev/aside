@@ -102,64 +102,79 @@ pub fn main() !void {
     fz.replace(@src(), "loop");
     var current_window_size: [2]f32 = .{ 1280, 720 };
 
+    var last_update_ns: u64 = 0;
+    var next_update_ns: u64 = 0;
+    var last_render_ns: u64 = 0;
+    var next_render_ns: u64 = 0;
+    const TARGET_UPDATE_TIME_NS: u64 = std.time.ns_per_s / 1000;
+    const TARGET_FRAMETIME_NS: u64 = std.time.ns_per_s / 60;
+
     outer: while (true) {
-        fz.push(@src(), "poll events");
-        var event: c.SDL_Event = undefined;
-        while (c.SDL_PollEvent(&event)) {
-            _ = zgui.backend.processEvent(&event);
-            if (event.type == c.SDL_EVENT_QUIT) {
-                // Ensure LinkFinder cleanup before exiting
-                if (link_finder_gui.isRunning()) {
-                    link_finder_gui.clearResults();
-                    // Give threads more time to stop properly
-                    std.time.sleep(500 * std.time.ns_per_ms);
+        const ticks_ns: u64 = @intCast(c.SDL_GetTicksNS());
+
+        if (ticks_ns >= next_update_ns) {
+            fz.push(@src(), "poll events");
+            var event: c.SDL_Event = undefined;
+            while (c.SDL_PollEvent(&event)) {
+                _ = zgui.backend.processEvent(&event);
+                if (event.type == c.SDL_EVENT_QUIT) {
+                    // Ensure LinkFinder cleanup before exiting
+                    if (link_finder_gui.isRunning()) {
+                        link_finder_gui.clearResults();
+                        // Give threads more time to stop properly
+                        std.time.sleep(500 * std.time.ns_per_ms);
+                    }
+                    break :outer;
                 }
-                break :outer;
-            }
 
-            // Handle window resize
-            if (event.type == c.SDL_EVENT_WINDOW_RESIZED) {
-                current_window_size[0] = @floatFromInt(event.window.data1);
-                current_window_size[1] = @floatFromInt(event.window.data2);
+                // Handle window resize
+                if (event.type == c.SDL_EVENT_WINDOW_RESIZED) {
+                    current_window_size[0] = @floatFromInt(event.window.data1);
+                    current_window_size[1] = @floatFromInt(event.window.data2);
+                }
             }
+            last_update_ns = ticks_ns;
+            next_update_ns = ticks_ns + TARGET_UPDATE_TIME_NS;
+            fz.pop();
         }
+        if (ticks_ns >= next_render_ns) {
+            fz.replace(@src(), "render");
+            tracy.frameMark();
 
-        fz.replace(@src(), "render");
-        tracy.frameMark();
+            fz.push(@src(), "acquire");
+            const cmd = try SDL.GPUCommandBuffer.acquire(&device);
+            const swapchain_texture: ?*c.SDL_GPUTexture = try cmd.waitAndAcquireSwapchainTexture(&window);
+            if (swapchain_texture == null) return;
 
-        fz.push(@src(), "acquire");
-        const cmd = try SDL.GPUCommandBuffer.acquire(&device);
-        const swapchain_texture: ?*c.SDL_GPUTexture = try cmd.waitAndAcquireSwapchainTexture(&window);
-        if (swapchain_texture == null) return;
+            const tex = swapchain_texture.?;
 
-        const tex = swapchain_texture.?;
+            // SDL Rendering
 
-        // SDL Rendering
+            fz.replace(@src(), "begin render pass");
+            const color_target_info = c.SDL_GPUColorTargetInfo{
+                .clear_color = .{ .r = themes.CatppuccinMocha.base[0], .g = themes.CatppuccinMocha.base[1], .b = themes.CatppuccinMocha.base[2], .a = themes.CatppuccinMocha.base[3] },
+                .texture = tex,
+                .load_op = c.SDL_GPU_LOADOP_CLEAR,
+                .store_op = c.SDL_GPU_STOREOP_STORE,
+            };
 
-        fz.replace(@src(), "begin render pass");
-        const color_target_info = c.SDL_GPUColorTargetInfo{
-            .clear_color = .{ .r = themes.CatppuccinMocha.base[0], .g = themes.CatppuccinMocha.base[1], .b = themes.CatppuccinMocha.base[2], .a = themes.CatppuccinMocha.base[3] },
-            .texture = tex,
-            .load_op = c.SDL_GPU_LOADOP_CLEAR,
-            .store_op = c.SDL_GPU_STOREOP_STORE,
-        };
+            const rpass = try SDL.GPURenderPass.begin(&cmd, &.{color_target_info}, null);
 
-        const rpass = try SDL.GPURenderPass.begin(&cmd, &.{color_target_info}, null);
+            zgui.backend.newFrame(@intFromFloat(current_window_size[0]), @intFromFloat(current_window_size[1]), 1.0);
 
-        zgui.backend.newFrame(@intFromFloat(current_window_size[0]), @intFromFloat(current_window_size[1]), 1.0);
+            // Render main window with tabs
+            try renderMainWindow(current_window_size);
 
-        // Render main window with tabs
-        try renderMainWindow(current_window_size);
+            zgui.render();
+            zgui.backend.prepareDrawData(cmd.handle);
+            zgui.backend.renderDrawData(cmd.handle, rpass.handle, null);
 
-        zgui.render();
-        zgui.backend.prepareDrawData(cmd.handle);
-        zgui.backend.renderDrawData(cmd.handle, rpass.handle, null);
-
-        fz.replace(@src(), "submit");
-        rpass.end();
-        try cmd.submit();
-
-        fz.pop();
-        fz.pop();
+            fz.replace(@src(), "submit");
+            rpass.end();
+            try cmd.submit();
+            last_render_ns = ticks_ns;
+            next_render_ns = ticks_ns + TARGET_FRAMETIME_NS;
+            fz.pop();
+        }
     }
 }
