@@ -1,47 +1,18 @@
+// -- Imports -- //
+
 const std = @import("std");
 
-const SDL = @import("ffi.zig").SDL;
 const c = @import("ffi.zig").c;
+const SDL = @import("ffi.zig").SDL;
 const zgui = @import("zgui");
 const tracy = @import("perf/tracy.zig");
 
+const themes = @import("gui/themes.zig");
+
+// Aliases
+
 const FZ = tracy.FnZone;
 const LinkFinder = @import("tools/LinkFinder.zig");
-
-// -- Catppuccin Mocha Colors -- //
-const CatppuccinMocha = struct {
-    // Base colors
-    const base = [4]f32{ 30.0 / 255.0, 30.0 / 255.0, 46.0 / 255.0, 1.0 }; // #1e1e2e
-    const mantle = [4]f32{ 24.0 / 255.0, 24.0 / 255.0, 37.0 / 255.0, 1.0 }; // #181825
-    const crust = [4]f32{ 17.0 / 255.0, 17.0 / 255.0, 27.0 / 255.0, 1.0 }; // #11111b
-
-    // Text colors
-    const text = [4]f32{ 205.0 / 255.0, 214.0 / 255.0, 244.0 / 255.0, 1.0 }; // #cdd6f4
-    const subtext1 = [4]f32{ 186.0 / 255.0, 194.0 / 255.0, 222.0 / 255.0, 1.0 }; // #bac2de
-    const subtext0 = [4]f32{ 166.0 / 255.0, 173.0 / 255.0, 200.0 / 255.0, 1.0 }; // #a6adc8
-    const overlay2 = [4]f32{ 147.0 / 255.0, 153.0 / 255.0, 178.0 / 255.0, 1.0 }; // #9399b2
-    const overlay1 = [4]f32{ 127.0 / 255.0, 132.0 / 255.0, 156.0 / 255.0, 1.0 }; // #7f849c
-    const overlay0 = [4]f32{ 108.0 / 255.0, 112.0 / 255.0, 134.0 / 255.0, 1.0 }; // #6c7086
-    const surface2 = [4]f32{ 88.0 / 255.0, 91.0 / 255.0, 112.0 / 255.0, 1.0 }; // #585b70
-    const surface1 = [4]f32{ 69.0 / 255.0, 71.0 / 255.0, 90.0 / 255.0, 1.0 }; // #45475a
-    const surface0 = [4]f32{ 49.0 / 255.0, 50.0 / 255.0, 68.0 / 255.0, 1.0 }; // #313244
-
-    // Accent colors
-    const rosewater = [4]f32{ 245.0 / 255.0, 224.0 / 255.0, 220.0 / 255.0, 1.0 }; // #f5e0dc
-    const flamingo = [4]f32{ 242.0 / 255.0, 205.0 / 255.0, 205.0 / 255.0, 1.0 }; // #f2cdcd
-    const pink = [4]f32{ 245.0 / 255.0, 194.0 / 255.0, 231.0 / 255.0, 1.0 }; // #f5c2e7
-    const mauve = [4]f32{ 203.0 / 255.0, 166.0 / 255.0, 247.0 / 255.0, 1.0 }; // #cba6f7
-    const red = [4]f32{ 243.0 / 255.0, 139.0 / 255.0, 168.0 / 255.0, 1.0 }; // #f38ba8
-    const maroon = [4]f32{ 235.0 / 255.0, 160.0 / 255.0, 172.0 / 255.0, 1.0 }; // #eba0ac
-    const peach = [4]f32{ 250.0 / 255.0, 179.0 / 255.0, 135.0 / 255.0, 1.0 }; // #fab387
-    const yellow = [4]f32{ 249.0 / 255.0, 226.0 / 255.0, 175.0 / 255.0, 1.0 }; // #f9e2af
-    const green = [4]f32{ 166.0 / 255.0, 227.0 / 255.0, 161.0 / 255.0, 1.0 }; // #a6e3a1
-    const teal = [4]f32{ 148.0 / 255.0, 226.0 / 255.0, 213.0 / 255.0, 1.0 }; // #94e2d5
-    const sky = [4]f32{ 137.0 / 255.0, 220.0 / 255.0, 235.0 / 255.0, 1.0 }; // #89dceb
-    const sapphire = [4]f32{ 116.0 / 255.0, 199.0 / 255.0, 236.0 / 255.0, 1.0 }; // #74c7ec
-    const blue = [4]f32{ 137.0 / 255.0, 180.0 / 255.0, 250.0 / 255.0, 1.0 }; // #89b4fa
-    const lavender = [4]f32{ 180.0 / 255.0, 190.0 / 255.0, 254.0 / 255.0, 1.0 }; // #b4befe
-};
 
 // -- LinkFinder GUI State -- //
 
@@ -149,104 +120,6 @@ const LinkFinderState = struct {
 };
 
 // -- Helpers -- //
-
-// Apply Catppuccin Mocha theme to ImGui
-fn applyCatppuccinMochaTheme() void {
-    const style = zgui.getStyle();
-
-    // Window colors
-    style.setColor(.window_bg, CatppuccinMocha.base);
-    style.setColor(.child_bg, CatppuccinMocha.mantle);
-    style.setColor(.popup_bg, CatppuccinMocha.surface0);
-
-    // Border colors
-    style.setColor(.border, CatppuccinMocha.surface1);
-    style.setColor(.border_shadow, CatppuccinMocha.crust);
-
-    // Frame colors (buttons, checkboxes, etc.)
-    style.setColor(.frame_bg, CatppuccinMocha.surface0);
-    style.setColor(.frame_bg_hovered, CatppuccinMocha.surface1);
-    style.setColor(.frame_bg_active, CatppuccinMocha.surface2);
-
-    // Title colors
-    style.setColor(.title_bg, CatppuccinMocha.mantle);
-    style.setColor(.title_bg_active, CatppuccinMocha.surface0);
-    style.setColor(.title_bg_collapsed, CatppuccinMocha.surface0);
-
-    // Menu colors
-    style.setColor(.menu_bar_bg, CatppuccinMocha.surface0);
-
-    // Scrollbar colors
-    style.setColor(.scrollbar_bg, CatppuccinMocha.surface0);
-    style.setColor(.scrollbar_grab, CatppuccinMocha.surface1);
-    style.setColor(.scrollbar_grab_hovered, CatppuccinMocha.surface2);
-    style.setColor(.scrollbar_grab_active, CatppuccinMocha.overlay0);
-
-    // Checkbox colors
-    style.setColor(.check_mark, CatppuccinMocha.green);
-
-    // Slider colors
-    style.setColor(.slider_grab, CatppuccinMocha.blue);
-    style.setColor(.slider_grab_active, CatppuccinMocha.sapphire);
-
-    // Button colors
-    style.setColor(.button, CatppuccinMocha.surface0);
-    style.setColor(.button_hovered, CatppuccinMocha.surface1);
-    style.setColor(.button_active, CatppuccinMocha.surface2);
-
-    // Header colors (for tabs)
-    style.setColor(.header, CatppuccinMocha.surface0);
-    style.setColor(.header_hovered, CatppuccinMocha.surface1);
-    style.setColor(.header_active, CatppuccinMocha.surface2);
-
-    // Separator colors
-    style.setColor(.separator, CatppuccinMocha.surface1);
-    style.setColor(.separator_hovered, CatppuccinMocha.surface2);
-    style.setColor(.separator_active, CatppuccinMocha.overlay0);
-
-    // Resize grip colors
-    style.setColor(.resize_grip, CatppuccinMocha.surface1);
-    style.setColor(.resize_grip_hovered, CatppuccinMocha.surface2);
-    style.setColor(.resize_grip_active, CatppuccinMocha.overlay0);
-
-    // Tab colors
-    style.setColor(.tab, CatppuccinMocha.surface0);
-    style.setColor(.tab_hovered, CatppuccinMocha.surface1);
-    style.setColor(.tab_selected, CatppuccinMocha.surface2);
-    style.setColor(.tab_dimmed, CatppuccinMocha.surface0);
-    style.setColor(.tab_dimmed_selected, CatppuccinMocha.surface1);
-
-    // Text colors
-    style.setColor(.text, CatppuccinMocha.text);
-    style.setColor(.text_disabled, CatppuccinMocha.overlay0);
-
-    // Plot colors
-    style.setColor(.plot_lines, CatppuccinMocha.blue);
-    style.setColor(.plot_lines_hovered, CatppuccinMocha.sapphire);
-    style.setColor(.plot_histogram, CatppuccinMocha.green);
-    style.setColor(.plot_histogram_hovered, CatppuccinMocha.teal);
-
-    // Table colors
-    style.setColor(.table_header_bg, CatppuccinMocha.surface0);
-    style.setColor(.table_border_strong, CatppuccinMocha.surface1);
-    style.setColor(.table_border_light, CatppuccinMocha.surface0);
-    style.setColor(.table_row_bg, CatppuccinMocha.surface0);
-    style.setColor(.table_row_bg_alt, CatppuccinMocha.surface1);
-
-    // Progress bar colors
-    style.setColor(.plot_lines, CatppuccinMocha.blue);
-
-    // Drag and drop colors
-    style.setColor(.drag_drop_target, CatppuccinMocha.yellow);
-
-    // Navigation colors
-    style.setColor(.nav_highlight, CatppuccinMocha.blue);
-    style.setColor(.nav_windowing_highlight, CatppuccinMocha.blue);
-    style.setColor(.nav_windowing_dim_bg, CatppuccinMocha.overlay0);
-
-    // Modal colors
-    style.setColor(.modal_window_dim_bg, CatppuccinMocha.overlay0);
-}
 
 // Helper function to format duration
 fn formatDuration(allocator: std.mem.Allocator, duration_ms: i64) ![]const u8 {
@@ -483,7 +356,7 @@ fn renderLinkFinderTab(state: *LinkFinderState) void {
     }
 
     if (state.hasError()) {
-        zgui.textColored(CatppuccinMocha.red, "Error: {s}", .{state.getErrorMessage() orelse "Unknown error"});
+        zgui.textColored(themes.CatppuccinMocha.red, "Error: {s}", .{state.getErrorMessage() orelse "Unknown error"});
     }
 
     // Results display
@@ -501,7 +374,7 @@ fn renderLinkFinderTab(state: *LinkFinderState) void {
             const total_duration = stats.last_activity_time - stats.start_time;
             const duration_str = formatDuration(arena_allocator, total_duration) catch "N/A";
 
-            zgui.textColored(CatppuccinMocha.green, "Completed in {s}", .{duration_str});
+            zgui.textColored(themes.CatppuccinMocha.green, "Completed in {s}", .{duration_str});
             zgui.text("Final stats: {} links found, {} pages processed", .{ stats.found, stats.processed });
 
             if (total_duration > 0) {
@@ -533,7 +406,7 @@ fn renderLinkFinderTab(state: *LinkFinderState) void {
             const total_duration = stats.last_activity_time - stats.start_time;
             const duration_str = formatDuration(arena_allocator, total_duration) catch "N/A";
 
-            zgui.textColored(CatppuccinMocha.yellow, "Completed in {s}", .{duration_str});
+            zgui.textColored(themes.CatppuccinMocha.yellow, "Completed in {s}", .{duration_str});
             zgui.text("Final stats: {} pages processed", .{stats.processed});
         }
 
@@ -620,7 +493,7 @@ pub fn main() !void {
     defer zgui.backend.deinit();
 
     // Apply Catppuccin Mocha theme
-    applyCatppuccinMochaTheme();
+    themes.applyImGuiTheme(themes.CatppuccinMocha);
 
     fz.replace(@src(), "loop");
     var current_window_size: [2]f32 = .{ 1280, 720 };
@@ -661,7 +534,7 @@ pub fn main() !void {
 
         fz.replace(@src(), "begin render pass");
         const color_target_info = c.SDL_GPUColorTargetInfo{
-            .clear_color = .{ .r = CatppuccinMocha.base[0], .g = CatppuccinMocha.base[1], .b = CatppuccinMocha.base[2], .a = CatppuccinMocha.base[3] },
+            .clear_color = .{ .r = themes.CatppuccinMocha.base[0], .g = themes.CatppuccinMocha.base[1], .b = themes.CatppuccinMocha.base[2], .a = themes.CatppuccinMocha.base[3] },
             .texture = tex,
             .load_op = c.SDL_GPU_LOADOP_CLEAR,
             .store_op = c.SDL_GPU_STOREOP_STORE,
