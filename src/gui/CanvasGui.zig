@@ -63,7 +63,7 @@ fn canvasToScreen(self: *const CanvasGui, canvas_coord: [2]f32, canvas_pos: [2]f
     };
 }
 
-pub fn render(self: *CanvasGui) !void {
+pub fn render(self: *CanvasGui, mouse_wheel_delta: f32) !void {
     // Canvas controls
     zgui.text("Canvas Controls", .{});
     zgui.separator();
@@ -138,14 +138,27 @@ pub fn render(self: *CanvasGui) !void {
     const is_hovered = zgui.isItemHovered(.{});
     const mouse_pos = zgui.getMousePos();
 
-    // Mouse wheel zooming - TODO: Find correct zgui API for mouse wheel
-    // For now, we'll implement zoom with + and - keys or other controls
-    if (is_hovered) {
-        // Placeholder for mouse wheel zooming
-        // const wheel_delta = ...; // Need to find correct zgui mouse wheel API
-        // if (wheel_delta != 0) {
-        //     // Zoom logic here
-        // }
+    // Mouse wheel zooming
+    if (is_hovered and mouse_wheel_delta != 0) {
+        // Get canvas coordinates for current mouse position before zoom
+        const canvas_mouse_coord_before = self.screenToCanvas(mouse_pos, canvas_pos);
+
+        // Apply zoom
+        const zoom_factor: f32 = if (mouse_wheel_delta > 0) 1.2 else 1.0 / 1.2;
+        self.zoom *= zoom_factor;
+        self.zoom = std.math.clamp(self.zoom, 0.1, 10.0);
+
+        // Get canvas coordinates for current mouse position after zoom
+        const canvas_mouse_coord_after = self.screenToCanvas(mouse_pos, canvas_pos);
+
+        // Adjust pan offset to keep the same world point under the mouse
+        const coord_diff = [2]f32{
+            canvas_mouse_coord_after[0] - canvas_mouse_coord_before[0],
+            canvas_mouse_coord_after[1] - canvas_mouse_coord_before[1],
+        };
+
+        self.pan_offset[0] += coord_diff[0] * self.zoom;
+        self.pan_offset[1] += coord_diff[1] * self.zoom;
     }
 
     // Get canvas coordinates for current mouse position

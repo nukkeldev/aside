@@ -33,10 +33,16 @@ fractals_gui: @import("gui/FractalsGui.zig"),
 current_window_size: [2]f32,
 should_quit: bool,
 
+// Mouse wheel state
+mouse_wheel_delta: f32,
+
+// Debug state
+debug_windows_enabled: bool,
+
 // Sidebar state
 sidebar_collapsed: bool,
 sidebar_width: f32,
-current_tab: enum { link_finder, canvas, fractals, about },
+current_tab: enum { homepage, link_finder, canvas, fractals },
 
 last_update_ns: u64,
 next_update_ns: u64,
@@ -83,14 +89,16 @@ fn init(allocator: std.mem.Allocator) !App {
         .canvas_gui = canvas_gui,
         .fractals_gui = fractals_gui,
         .current_window_size = .{ 1280, 720 },
+        .should_quit = false,
+        .mouse_wheel_delta = 0.0,
+        .debug_windows_enabled = false,
         .sidebar_collapsed = false,
         .sidebar_width = 250.0,
-        .current_tab = .link_finder,
+        .current_tab = .homepage,
         .last_update_ns = 0,
         .next_update_ns = 0,
         .last_render_ns = 0,
         .next_render_ns = 0,
-        .should_quit = false,
     };
 }
 
@@ -108,8 +116,17 @@ fn pollEvents(self: *App) !void {
     var fz = FZ.init(@src(), "poll events");
     defer fz.end();
 
+    // Reset wheel delta each frame
+    self.mouse_wheel_delta = 0.0;
+
     var event: c.SDL_Event = undefined;
     while (c.SDL_PollEvent(&event)) {
+        // Process wheel events before passing to ImGui to avoid conflicts
+        if (event.type == c.SDL_EVENT_MOUSE_WHEEL) {
+            // Accumulate wheel delta - use a more reasonable scaling
+            self.mouse_wheel_delta += @floatCast(event.wheel.y);
+        }
+
         _ = zgui.backend.processEvent(&event);
 
         switch (event.type) {
@@ -122,6 +139,12 @@ fn pollEvents(self: *App) !void {
                 }
                 self.should_quit = true;
             },
+            c.SDL_EVENT_KEY_DOWN => {
+                // Toggle debug windows with grave key (`)
+                if (event.key.key == c.SDLK_GRAVE) {
+                    self.debug_windows_enabled = !self.debug_windows_enabled;
+                }
+            },
             c.SDL_EVENT_WINDOW_RESIZED => {
                 self.current_window_size[0] = @floatFromInt(event.window.data1);
                 self.current_window_size[1] = @floatFromInt(event.window.data2);
@@ -129,6 +152,11 @@ fn pollEvents(self: *App) !void {
             else => {},
         }
     }
+}
+
+// Helper method to get mouse wheel delta for this frame
+fn getMouseWheelDelta(self: *const App) f32 {
+    return self.mouse_wheel_delta;
 }
 
 // -- Rendering -- //
@@ -160,6 +188,11 @@ fn render(self: *App) !void {
 
     // Render main window with tabs
     try self.renderMainWindow();
+
+    // Render debug windows if enabled
+    if (self.debug_windows_enabled) {
+        try self.renderDebugWindows();
+    }
 
     zgui.render();
     zgui.backend.prepareDrawData(cmd.handle);
@@ -224,6 +257,15 @@ fn renderSidebar(self: *App) !void {
 
             zgui.separator();
 
+            // Information Section
+            if (zgui.collapsingHeader("Information", .{ .default_open = true })) {
+                if (zgui.selectable("Homepage", .{ .selected = self.current_tab == .homepage })) {
+                    self.current_tab = .homepage;
+                }
+            }
+
+            zgui.spacing();
+
             // Analysis Tools Section
             if (zgui.collapsingHeader("Analysis Tools", .{ .default_open = true })) {
                 if (zgui.selectable("Link Finder", .{ .selected = self.current_tab == .link_finder })) {
@@ -245,13 +287,6 @@ fn renderSidebar(self: *App) !void {
             }
 
             zgui.spacing();
-
-            // Information Section
-            if (zgui.collapsingHeader("Information", .{ .default_open = false })) {
-                if (zgui.selectable("About", .{ .selected = self.current_tab == .about })) {
-                    self.current_tab = .about;
-                }
-            }
         }
     }
 }
@@ -277,24 +312,29 @@ fn renderMainContent(self: *App) !void {
 
         // Render content based on current tab
         switch (self.current_tab) {
+            .homepage => self.renderHomepageContent(),
             .link_finder => try self.link_finder_gui.render(),
-            .canvas => try self.canvas_gui.render(),
-            .fractals => try self.fractals_gui.render(),
-            .about => self.renderAboutContent(),
+            .canvas => try self.canvas_gui.render(self.getMouseWheelDelta()),
+            .fractals => try self.fractals_gui.render(self.getMouseWheelDelta()),
         }
     }
 }
 
-fn renderAboutContent(self: *App) void {
-    _ = self; // suppress unused variable warning
-
-    zgui.text("Aside - Multipurpose Analysis & Creative Tool", .{});
+fn renderHomepageContent(_: *App) void {
+    // Welcome header
+    zgui.text("Welcome to Aside", .{});
     zgui.separator();
 
     zgui.spacing();
-    zgui.text("Built with Zig and ImGui", .{});
+    zgui.text("A multipurpose analysis and creative tool built with Zig and ImGui", .{});
 
     zgui.spacing();
+    zgui.spacing();
+
+    zgui.separator();
+    zgui.spacing();
+
+    // Feature overview
     zgui.textColored(.{ 0.7, 0.9, 1.0, 1.0 }, "Analysis Tools:", .{});
     zgui.bulletText("Extract links from web pages", .{});
     zgui.bulletText("Recursive link following", .{});
@@ -307,6 +347,174 @@ fn renderAboutContent(self: *App) void {
     zgui.bulletText("Mathematical fractal generation", .{});
     zgui.bulletText("Multiple fractal types (Mandelbrot, Julia, Sierpinski, Burning Ship)", .{});
     zgui.bulletText("Customizable color schemes and parameters", .{});
+}
+
+// -- Debug Windows -- //
+
+fn renderDebugWindows(self: *App) !void {
+    // Main App debug window - always show, positioned at top-right
+    zgui.setNextWindowPos(.{ .x = self.current_window_size[0] - 350, .y = 10, .cond = .first_use_ever });
+    zgui.setNextWindowSize(.{ .w = 340, .h = 400, .cond = .first_use_ever });
+
+    const main_debug_flags = zgui.WindowFlags{
+        .no_bring_to_front_on_focus = false, // Allow bringing to front
+    };
+
+    if (zgui.begin("App Debug", .{ .popen = &self.debug_windows_enabled, .flags = main_debug_flags })) {
+        defer zgui.end();
+
+        // Bring debug window to front when first opened
+        if (zgui.isWindowAppearing()) {
+            zgui.setWindowFocus(null);
+        }
+
+        zgui.text("Application State", .{});
+        zgui.separator();
+
+        zgui.text("Window Size: {d:.1} x {d:.1}", .{ self.current_window_size[0], self.current_window_size[1] });
+        zgui.text("Current Tab: {s}", .{@tagName(self.current_tab)});
+        zgui.text("Sidebar Collapsed: {}", .{self.sidebar_collapsed});
+        zgui.text("Sidebar Width: {d:.1}", .{self.sidebar_width});
+        zgui.text("Mouse Wheel Delta: {d:.3}", .{self.mouse_wheel_delta});
+
+        zgui.spacing();
+        zgui.text("Performance", .{});
+        zgui.separator();
+
+        const current_ns: u64 = @intCast(c.SDL_GetTicksNS());
+        const update_delta = if (self.last_update_ns > 0) current_ns - self.last_update_ns else 0;
+        const render_delta = if (self.last_render_ns > 0) current_ns - self.last_render_ns else 0;
+
+        zgui.text("Last Update Delta: {d:.2}ms", .{@as(f64, @floatFromInt(update_delta)) / std.time.ns_per_ms});
+        zgui.text("Last Render Delta: {d:.2}ms", .{@as(f64, @floatFromInt(render_delta)) / std.time.ns_per_ms});
+        zgui.text("Target Update Time: {d:.2}ms", .{@as(f64, TARGET_UPDATE_TIME_NS) / std.time.ns_per_ms});
+        zgui.text("Target Frame Time: {d:.2}ms", .{@as(f64, TARGET_FRAMETIME_NS) / std.time.ns_per_ms});
+
+        zgui.spacing();
+        if (zgui.button("Close Debug Windows", .{})) {
+            self.debug_windows_enabled = false;
+        }
+    }
+
+    // Individual GUI debug windows - only show relevant to current tab
+    try self.renderGuiDebugWindows();
+}
+
+fn renderGuiDebugWindows(self: *App) !void {
+    const gui_debug_flags = zgui.WindowFlags{
+        .no_bring_to_front_on_focus = false, // Allow bringing to front
+    };
+
+    // LinkFinder GUI Debug - only show when on link_finder tab
+    if (self.current_tab == .link_finder) {
+        // Position to the left, avoiding the main debug window
+        zgui.setNextWindowPos(.{ .x = 10, .y = 10, .cond = .first_use_ever });
+        zgui.setNextWindowSize(.{ .w = 320, .h = 380, .cond = .first_use_ever });
+
+        if (zgui.begin("LinkFinder Debug", .{ .flags = gui_debug_flags })) {
+            defer zgui.end();
+
+            // Bring to front when first appearing
+            if (zgui.isWindowAppearing()) {
+                zgui.setWindowFocus(null);
+            }
+
+            zgui.text("LinkFinder GUI State", .{});
+            zgui.separator();
+
+            zgui.text("Debug Mode: {}", .{self.link_finder_gui.debug});
+            zgui.text("URL Buffer: '{s}'", .{std.mem.sliceTo(&self.link_finder_gui.url_buffer, 0)});
+            zgui.text("Filter Buffer: '{s}'", .{std.mem.sliceTo(&self.link_finder_gui.filter_buffer, 0)});
+            zgui.text("Recursive: {}", .{self.link_finder_gui.recursive});
+            zgui.text("Recursion Limit: {d}", .{self.link_finder_gui.recursion_limit});
+            zgui.text("Worker Count: {d}", .{self.link_finder_gui.worker_count});
+            zgui.text("Has LinkFinder Instance: {}", .{self.link_finder_gui.link_finder != null});
+            zgui.text("Has Processing State: {}", .{self.link_finder_gui.processing_state != null});
+
+            if (self.link_finder_gui.processing_state) |state| {
+                zgui.spacing();
+                zgui.text("Processing State", .{});
+                zgui.separator();
+                zgui.text("Is Running: {}", .{state.is_running});
+                zgui.text("Has Results: {}", .{state.has_results});
+                zgui.text("Has Error: {}", .{state.has_error});
+                zgui.text("Total Found: {d}", .{state.total_found.load(.acquire)});
+                zgui.text("Total Processed: {d}", .{state.total_processed.load(.acquire)});
+                zgui.text("Results Count: {d}", .{state.results.items.len});
+                zgui.text("Work Queue Count: {d}", .{state.work_queue.items.len});
+                if (state.error_message) |err_msg| {
+                    zgui.textColored(.{ 1.0, 0.5, 0.5, 1.0 }, "Error: {s}", .{err_msg});
+                }
+            }
+        }
+    }
+
+    // Canvas GUI Debug - only show when on canvas tab
+    if (self.current_tab == .canvas) {
+        // Position to the left, avoiding the main debug window
+        zgui.setNextWindowPos(.{ .x = 10, .y = 10, .cond = .first_use_ever });
+        zgui.setNextWindowSize(.{ .w = 320, .h = 320, .cond = .first_use_ever });
+
+        if (zgui.begin("Canvas Debug", .{ .flags = gui_debug_flags })) {
+            defer zgui.end();
+
+            // Bring to front when first appearing
+            if (zgui.isWindowAppearing()) {
+                zgui.setWindowFocus(null);
+            }
+
+            zgui.text("Canvas GUI State", .{});
+            zgui.separator();
+
+            zgui.text("Drawing: {}", .{self.canvas_gui.drawing});
+            zgui.text("Panning: {}", .{self.canvas_gui.panning});
+            zgui.text("Last Mouse Pos: {d:.1}, {d:.1}", .{ self.canvas_gui.last_mouse_pos[0], self.canvas_gui.last_mouse_pos[1] });
+            zgui.text("Pan Start Pos: {d:.1}, {d:.1}", .{ self.canvas_gui.pan_start_pos[0], self.canvas_gui.pan_start_pos[1] });
+            zgui.text("Brush Size: {d:.1}", .{self.canvas_gui.brush_size});
+            zgui.text("Brush Color: {d:.3}, {d:.3}, {d:.3}, {d:.3}", .{ self.canvas_gui.brush_color[0], self.canvas_gui.brush_color[1], self.canvas_gui.brush_color[2], self.canvas_gui.brush_color[3] });
+            zgui.text("Canvas Size: {d:.1} x {d:.1}", .{ self.canvas_gui.canvas_size[0], self.canvas_gui.canvas_size[1] });
+            zgui.text("Zoom: {d:.3}", .{self.canvas_gui.zoom});
+            zgui.text("Pan Offset: {d:.1}, {d:.1}", .{ self.canvas_gui.pan_offset[0], self.canvas_gui.pan_offset[1] });
+            zgui.text("Draw Commands Count: {d}", .{self.canvas_gui.draw_commands.items.len});
+        }
+    }
+
+    // Fractals GUI Debug - only show when on fractals tab
+    if (self.current_tab == .fractals) {
+        // Position to the left, avoiding the main debug window
+        zgui.setNextWindowPos(.{ .x = 10, .y = 10, .cond = .first_use_ever });
+        zgui.setNextWindowSize(.{ .w = 320, .h = 420, .cond = .first_use_ever });
+
+        if (zgui.begin("Fractals Debug", .{ .flags = gui_debug_flags })) {
+            defer zgui.end();
+
+            // Bring to front when first appearing
+            if (zgui.isWindowAppearing()) {
+                zgui.setWindowFocus(null);
+            }
+
+            zgui.text("Fractals GUI State", .{});
+            zgui.separator();
+
+            zgui.text("Fractal Type: {s}", .{@tagName(self.fractals_gui.fractal_type)});
+            zgui.text("Image Size: {d} x {d}", .{ self.fractals_gui.image_size[0], self.fractals_gui.image_size[1] });
+            zgui.text("Has Texture: {}", .{self.fractals_gui.texture_id != null});
+            zgui.text("Needs Update: {}", .{self.fractals_gui.needs_update});
+            zgui.text("Panning: {}", .{self.fractals_gui.panning});
+            zgui.text("Last Mouse Pos: {d:.1}, {d:.1}", .{ self.fractals_gui.last_mouse_pos[0], self.fractals_gui.last_mouse_pos[1] });
+
+            zgui.spacing();
+            zgui.text("Fractal Parameters", .{});
+            zgui.separator();
+            zgui.text("Zoom: {d:.6}", .{self.fractals_gui.zoom});
+            zgui.text("Center: {d:.6}, {d:.6}", .{ self.fractals_gui.center[0], self.fractals_gui.center[1] });
+            zgui.text("Max Iterations: {d}", .{self.fractals_gui.max_iterations});
+            zgui.text("Julia C: {d:.6}, {d:.6}", .{ self.fractals_gui.julia_c[0], self.fractals_gui.julia_c[1] });
+            zgui.text("Sierpinski Iterations: {d}", .{self.fractals_gui.sierpinski_iterations});
+            zgui.text("Color Scheme: {d}", .{self.fractals_gui.color_scheme});
+            zgui.text("Resolution: {d}", .{self.fractals_gui.resolution});
+        }
+    }
 }
 
 // -- Main Loop -- //
