@@ -1,29 +1,43 @@
+//! Handles the state and rendering of a GUI for [LinkFinder](../tools/LinkFinder.zig)
+
 // -- Imports -- //
 
 const std = @import("std");
 const zgui = @import("zgui");
 
 const themes = @import("themes.zig");
+const c = @import("../ffi.zig").c;
 
 const LinkFinder = @import("../tools/LinkFinder.zig");
 
 // ---
 
+/// How long for the loading spinner to complete a full cycle.
 const SPINNER_PERIOD_MS: f32 = 2000;
+/// Characters used for the loading spinner.
 const SPINNER_CHARS: []const []const u8 = &.{ "|", "/", "-", "\\" };
+
+const log = std.log.scoped(.lf);
 
 // ---
 
 allocator: std.mem.Allocator,
+
+/// Whether to enable debug outputs in the console for LinkFinder.
 debug: bool = false,
 
+/// Buffer for the URL input.
 url_buffer: [512:0]u8 = [_:0]u8{0} ** 512,
 // TODO: Need a way to handle multiple filters.
+/// Buffer for the filter input (regex).
 filter_buffer: [256:0]u8 = [_:0]u8{0} ** 256,
 
+/// Whether to perform recursive link finding.
 recursive: bool = false,
+/// Recursion limit.
 recursion_limit: i32 = 2,
 
+/// Number of worker threads to use for link finding.
 worker_count: i32 = 4,
 
 link_finder: ?LinkFinder = null,
@@ -51,6 +65,7 @@ pub fn deinit(self: *@This()) void {
 
 // -- Usage -- //
 
+/// Clears the results and resets the processing state.
 pub fn clearResults(self: *@This()) void {
     if (self.processing_state) |*state| state.clearResults();
 }
@@ -104,111 +119,138 @@ pub fn getStats(self: *@This()) Stats {
     return Stats{};
 }
 
+// -- Usage -- //
+
+/// Starts the link finding process with the current configuration
+fn startLinkFinding(state: *@This(), url_len: usize) !void {
+    if (state.isRunning()) {
+        log.warn("Link finding is already running, stopping current process.", .{});
+        state.stopLinkFinding();
+    }
+
+    // Clear the previous results and processing state.
+    state.clearResults();
+
+    // Prepare a new filters array for the LF.
+    var filters = std.ArrayList([]const u8).init(state.allocator);
+    defer {
+        for (filters.items) |filter| state.allocator.free(filter);
+        filters.deinit();
+    }
+
+    const filter_len = std.mem.indexOfScalar(u8, &state.filter_buffer, 0) orelse state.filter_buffer.len;
+    if (filter_len > 0) {
+        const filter = try state.allocator.dupe(u8, state.filter_buffer[0..filter_len]);
+        try filters.append(filter);
+    }
+
+    // Create the LF and PS.
+    state.link_finder = try LinkFinder.init(state.allocator, state.debug, filters.items);
+    state.processing_state = LinkFinder.ProcessingState.init(state.allocator);
+
+    // Start finding links.
+    const config = LinkFinder.MultiThreadedConfig{
+        .recursive = state.recursive,
+        .recursion_limit = @intCast(state.recursion_limit),
+        .worker_count = @intCast(state.worker_count),
+    };
+
+    const url = state.url_buffer[0..url_len];
+    try state.link_finder.?.findLinksMultiThreaded(&state.processing_state.?, url, config);
+}
+
+// TODO: We need to interrupt the workers properly.
+/// Stops the link finding process and cleans up resources
+fn stopLinkFinding(state: *@This()) void {
+    // Stop the processing by clearing results and cleaning up
+    state.clearResults();
+    // Also cleanup LinkFinder instance
+    if (state.link_finder) |*lf| {
+        lf.deinit();
+        state.link_finder = null;
+    }
+}
+
 // -- Rendering -- //
 
 pub fn render(state: *@This()) !void {
-    { // Inputs
-        zgui.text("URL:", .{});
-        _ = zgui.inputText("##url", .{ .buf = &state.url_buffer });
-
-        zgui.text("Filter (regex):", .{});
-        _ = zgui.inputText("##filter", .{ .buf = &state.filter_buffer });
-
-        _ = zgui.checkbox("Recursive", .{ .v = &state.recursive });
-        _ = zgui.checkbox("Debug", .{ .v = &state.debug });
-
-        if (state.recursive) {
-            _ = zgui.sliderInt("Recursion Limit", .{ .v = &state.recursion_limit, .min = 1, .max = 10 });
-        }
-
-        _ = zgui.sliderInt("Worker Threads", .{ .v = &state.worker_count, .min = 1, .max = 16 }); // TODO: Retrieve CPU count dynamically
-    }
-
+    state.renderInputControls();
     zgui.separator();
+    try state.renderActionButtons();
+    try state.renderStatusDisplay();
+    try state.renderResults();
+}
 
-    { // Buttons
-        const url_len = std.mem.indexOfScalar(u8, &state.url_buffer, 0) orelse state.url_buffer.len;
-        const has_url = url_len > 0 and
-            (std.mem.startsWith(u8, state.url_buffer[0..url_len], "http://") or
-                std.mem.startsWith(u8, state.url_buffer[0..url_len], "https://"));
+/// Renders the input controls section (URL, filter, options)
+fn renderInputControls(state: *@This()) void {
+    zgui.text("URL:", .{});
+    _ = zgui.inputTextWithHint("##url", .{ .buf = &state.url_buffer, .hint = "e.g. https://example.com" });
 
-        zgui.beginDisabled(.{ .disabled = !has_url or state.isRunning() });
-        if (zgui.button("Find Links", .{})) outer: {
-            if (state.isRunning()) break :outer;
+    zgui.text("Filter (regex):", .{});
+    _ = zgui.inputTextWithHint("##filter", .{ .buf = &state.filter_buffer, .hint = "e.g. ^.*\\.pdf$" });
 
-            state.clearResults();
-
-            var filters = std.ArrayList([]const u8).init(state.allocator);
-            defer {
-                // Clean up filter strings that we allocated
-                for (filters.items) |filter| {
-                    state.allocator.free(filter);
-                }
-                filters.deinit();
-            }
-
-            const filter_len = std.mem.indexOfScalar(u8, &state.filter_buffer, 0) orelse state.filter_buffer.len;
-            if (filter_len > 0) {
-                const filter = try state.allocator.dupe(u8, state.filter_buffer[0..filter_len]);
-                try filters.append(filter);
-            }
-
-            // Create LinkFinder instance
-            state.link_finder = try LinkFinder.init(state.allocator, state.debug, filters.items);
-
-            // Create processing state
-            state.processing_state = LinkFinder.ProcessingState.init(state.allocator);
-
-            // Start processing
-            const config = LinkFinder.MultiThreadedConfig{
-                .recursive = state.recursive,
-                .recursion_limit = @intCast(state.recursion_limit),
-                .worker_count = @intCast(state.worker_count),
-            };
-
-            const url = state.url_buffer[0..url_len];
-            try state.link_finder.?.findLinksMultiThreaded(&state.processing_state.?, url, config);
-        }
-        zgui.endDisabled();
-
-        zgui.sameLine(.{});
-
-        // Stop button (only shown when running)
-        if (state.isRunning()) {
-            if (zgui.button("Stop", .{})) {
-                // Stop the processing by clearing results and cleaning up
-                state.clearResults();
-                // Also cleanup LinkFinder instance
-                if (state.link_finder) |*lf| {
-                    lf.deinit();
-                    state.link_finder = null;
-                }
-            }
-            zgui.sameLine(.{});
-        }
-
-        if (zgui.button("Clear Results", .{})) {
-            state.clearResults();
-            // Also cleanup LinkFinder instance if not running
-            if (!state.isRunning() and state.link_finder != null) {
-                if (state.link_finder) |*lf| {
-                    lf.deinit();
-                    state.link_finder = null;
-                }
-            }
-        }
-
-        zgui.sameLine(.{});
-
-        // Save results button
-        zgui.beginDisabled(.{ .disabled = !state.hasResults() or state.getResults().len == 0 });
-        if (zgui.button("Save Results", .{})) {
-            try saveResultsToFile(state);
-        }
-        zgui.endDisabled();
+    if (zgui.checkbox("Recursive", .{ .v = &state.recursive })) {
+        log.debug("Recursive mode: {}", .{state.recursive});
+    }
+    if (zgui.checkbox("Debug", .{ .v = &state.debug })) {
+        log.debug("Debug mode: {}", .{state.debug});
     }
 
-    // Status display
+    if (state.recursive) {
+        _ = zgui.sliderInt("Recursion Limit", .{ .v = &state.recursion_limit, .min = 1, .max = 10 });
+    }
+
+    _ = zgui.sliderInt("Worker Threads", .{ .v = &state.worker_count, .min = 1, .max = 16 }); // TODO: Retrieve CPU count dynamically
+}
+
+/// Renders the action buttons (Find Links, Stop, Clear Results, Save Results)
+fn renderActionButtons(state: *@This()) !void {
+    const url_len = std.mem.indexOfScalar(u8, &state.url_buffer, 0) orelse state.url_buffer.len;
+    const has_url = url_len > 0 and
+        (std.mem.startsWith(u8, state.url_buffer[0..url_len], "http://") or
+            std.mem.startsWith(u8, state.url_buffer[0..url_len], "https://"));
+
+    // Find Links button
+    zgui.beginDisabled(.{ .disabled = !has_url or state.isRunning() });
+    if (zgui.button("Find Links", .{})) {
+        try state.startLinkFinding(url_len);
+    }
+    zgui.endDisabled();
+
+    zgui.sameLine(.{});
+
+    // Stop button (only shown when running)
+    if (state.isRunning()) {
+        if (zgui.button("Stop", .{})) {
+            state.stopLinkFinding();
+        }
+        zgui.sameLine(.{});
+    }
+
+    // Clear Results button
+    if (zgui.button("Clear Results", .{})) {
+        state.clearResults();
+        // Also cleanup LinkFinder instance if not running
+        if (!state.isRunning() and state.link_finder != null) {
+            if (state.link_finder) |*lf| {
+                lf.deinit();
+                state.link_finder = null;
+            }
+        }
+    }
+
+    zgui.sameLine(.{});
+
+    // Save Results button
+    zgui.beginDisabled(.{ .disabled = !state.hasResults() or state.getResults().len == 0 });
+    if (zgui.button("Save Results", .{})) {
+        try saveResultsToFile(state);
+    }
+    zgui.endDisabled();
+}
+
+/// Renders the status display section (spinner, stats, progress)
+fn renderStatusDisplay(state: *@This()) !void {
     if (state.isRunning()) {
         zgui.text("Finding links...", .{});
         zgui.sameLine(.{});
@@ -223,13 +265,13 @@ pub fn render(state: *@This()) !void {
         // Calculate timing information
         const current_time = std.time.milliTimestamp();
         const elapsed_ms: i64 = current_time - stats.start_time_ms;
-        const elpased_s: f64 = @as(f64, @floatFromInt(elapsed_ms)) / std.time.ms_per_s;
+        const elapsed_s: f64 = @as(f64, @floatFromInt(elapsed_ms)) / std.time.ms_per_s;
         const elapsed_ns: i64 = elapsed_ms * std.time.ns_per_ms;
 
         // Calculate processing rate
         var links_per_second: f64 = 0.0;
-        if (elpased_s > 0) {
-            links_per_second = @as(f64, @floatFromInt(stats.found)) / elpased_s;
+        if (elapsed_s > 0) {
+            links_per_second = @as(f64, @floatFromInt(stats.found)) / elapsed_s;
         }
 
         // Display main statistics
@@ -240,9 +282,9 @@ pub fn render(state: *@This()) !void {
             zgui.text("Duration: {s} | Rate: {d:.1} links/sec", .{ std.fmt.fmtDurationSigned(elapsed_ns), links_per_second });
 
             // Estimate time remaining (rough estimate based on queue size and processing rate)
-            if (stats.queue_size > 0 and stats.processed > 0 and elpased_s > 1.0) {
+            if (stats.queue_size > 0 and stats.processed > 0 and elapsed_s > 1.0) {
                 // Calculate pages processed per second instead of links per second for ETA
-                const pages_per_second = @as(f64, @floatFromInt(stats.processed)) / elpased_s;
+                const pages_per_second = @as(f64, @floatFromInt(stats.processed)) / elapsed_s;
                 if (pages_per_second > 0.01) {
                     const estimated_remaining_seconds = @as(f64, @floatFromInt(stats.queue_size)) / pages_per_second;
                     const estimated_remaining_ms = @as(i64, @intFromFloat(estimated_remaining_seconds * 1e3));
@@ -261,8 +303,10 @@ pub fn render(state: *@This()) !void {
     if (state.hasError()) {
         zgui.textColored(themes.CatppuccinMocha.red, "Error: {s}", .{state.getErrorMessage() orelse "Unknown error"});
     }
+}
 
-    // Results display
+/// Renders the results section
+fn renderResults(state: *@This()) !void {
     const results = state.getResults();
     if (state.hasResults() and results.len > 0) {
         zgui.separator();
@@ -287,7 +331,22 @@ pub fn render(state: *@This()) !void {
         const available_height = zgui.getContentRegionAvail()[1] - 20; // Leave some padding
         if (zgui.beginChild("results", .{ .w = 0, .h = available_height, .child_flags = .{ .border = true } })) {
             for (results, 0..) |result, i| {
-                zgui.text("{}: {s}", .{ i + 1, result });
+                const index = i + 1;
+                zgui.text("{}: ", .{index});
+                zgui.sameLine(.{});
+                const split = std.mem.indexOfAny(u8, result, &std.ascii.whitespace) orelse result.len;
+                const link = try state.allocator.dupeZ(u8, result[0..split]);
+                defer state.allocator.free(link);
+                if (zgui.textLink(link)) {
+                    // Open the link in the default browser
+                    const url_z = try state.allocator.dupeZ(u8, result);
+                    defer state.allocator.free(url_z);
+                    _ = c.SDL_OpenURL(url_z.ptr);
+                }
+                if (split < result.len) {
+                    zgui.sameLine(.{});
+                    zgui.text("{s}", .{result[split + 1 ..]}); // Show the rest of the link after whitespace
+                }
             }
         }
         zgui.endChild();
@@ -304,7 +363,7 @@ pub fn render(state: *@This()) !void {
 fn saveResultsToFile(state: *@This()) !void {
     const results = state.getResults();
     if (results.len == 0) {
-        std.log.warn("No results to save.", .{});
+        log.warn("No results to save.", .{});
         return;
     }
 

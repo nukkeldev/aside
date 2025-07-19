@@ -213,6 +213,8 @@ fn run(self: *App) !void {
             self.next_render_ns = ticks_ns + TARGET_FRAMETIME_NS;
         }
     }
+
+    // TODO: Need to clean up existing working.
 }
 
 pub fn main() !void {
