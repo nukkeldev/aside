@@ -27,6 +27,7 @@ allocator: std.mem.Allocator,
 window: SDL.Window,
 device: SDL.GPUDevice,
 link_finder_gui: @import("gui/LinkFinderGui.zig"),
+canvas_gui: @import("gui/CanvasGui.zig"),
 
 current_window_size: [2]f32,
 should_quit: bool,
@@ -62,11 +63,15 @@ fn init(allocator: std.mem.Allocator) !App {
     // Initialize LinkFinder GUI
     const link_finder_gui = @import("gui/LinkFinderGui.zig").init(allocator);
 
+    // Initialize Canvas GUI
+    const canvas_gui = @import("gui/CanvasGui.zig").init(allocator);
+
     return App{
         .allocator = allocator,
         .window = window,
         .device = device,
         .link_finder_gui = link_finder_gui,
+        .canvas_gui = canvas_gui,
         .current_window_size = .{ 1280, 720 },
         .last_update_ns = 0,
         .next_update_ns = 0,
@@ -78,6 +83,7 @@ fn init(allocator: std.mem.Allocator) !App {
 
 fn deinit(self: *App) void {
     self.link_finder_gui.deinit();
+    self.canvas_gui.deinit();
     zgui.backend.deinit();
     zgui.deinit();
 }
@@ -174,6 +180,12 @@ fn renderMainWindow(self: *App) !void {
             if (zgui.beginTabItem("LinkFinder", .{})) {
                 defer zgui.endTabItem();
                 try self.link_finder_gui.render();
+            }
+
+            // Canvas tab
+            if (zgui.beginTabItem("Canvas", .{})) {
+                defer zgui.endTabItem();
+                try self.canvas_gui.render();
             }
 
             // Add more tabs here in the future
