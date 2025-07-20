@@ -116,9 +116,6 @@ fn pollEvents(self: *App) !void {
     var fz = FZ.init(@src(), "poll events");
     defer fz.end();
 
-    // Reset wheel delta each frame
-    self.mouse_wheel_delta = 0.0;
-
     var event: c.SDL_Event = undefined;
     while (c.SDL_PollEvent(&event)) {
         // Process wheel events before passing to ImGui to avoid conflicts
@@ -536,6 +533,7 @@ fn run(self: *App) !void {
             try self.render();
             self.last_render_ns = ticks_ns;
             self.next_render_ns = ticks_ns + TARGET_FRAMETIME_NS;
+            self.mouse_wheel_delta = 0.0; // Reset wheel delta after rendering
         }
     }
 
